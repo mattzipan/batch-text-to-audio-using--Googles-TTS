@@ -19,6 +19,15 @@ This project allows you to generate high-quality Indonesian audio files from a t
     *   Place your Google Cloud Service Account JSON file in the project root and rename it to `service-account.json`.
     *   **Important:** Ensure `service-account.json` is ignored by git to protect your credentials. The `.gitignore` file included in this repo handles this.
 
+## 📝 Input File Format
+
+Prepare your vocabulary or sentence list in a file named **`sentences.txt`** in the project root.
+*   **Format:** Plain text (`.txt`).
+*   **Structure:** Add each word or sentence on its own **new line**.
+*   **Encoding:** UTF-8 is recommended.
+
+The script will process each line and generate a corresponding audio file.
+
 ## 🎙️ How to Run
 
 ### Basic Usage (Default Voice: id-ID-Wavenet-A)
