@@ -4,40 +4,41 @@ This project allows you to generate high-quality Indonesian audio files from a t
 
 ## 📋 Requirements
 
-*   **Python 3.12+** (Installed on your system)
+*   **Python 3.12+**
 *   **Google Gemini API Key** (Free tier available at [aistudio.google.com](https://aistudio.google.com))
 
-## 🚀 Setup
+## 🚀 Installation & Setup
 
-1.  **Navigate to the project directory:**
+1.  **Clone the repository:**
     ```bash
-    cd /home/choppersmith/Code/tts
+    git clone https://github.com/mattzipan/batch-text-to-audio-using--Googles-TTS.git
+    cd batch-text-to-audio-using--Googles-TTS
     ```
 
-2.  **Create a Virtual Environment (if not already active):**
+2.  **Set up a Virtual Environment:**
     ```bash
-    # Create the environment
     python3 -m venv venv
-
-    # Activate it
     source venv/bin/activate
     ```
 
 3.  **Install Dependencies:**
     ```bash
-    pip install google-genai python-dotenv
+    pip install -r requirements.txt
     ```
 
-4.  **Set your API Key:**
-    *   Open (or create) the `.env` file in this directory.
-    *   Add your key:
+4.  **Configure API Key:**
+    *   Rename `.env.example` to `.env`:
         ```bash
+        cp .env.example .env
+        ```
+    *   Open `.env` and paste your Google Gemini API key:
+        ```text
         GEMINI_API_KEY=AIzaSy...YourKeyHere...
         ```
 
 ## 📝 Input File Format
 
-Create a file named **`sentences.txt`** in the same directory.
+Create a file named **`sentences.txt`** in the project directory.
 *   **Format:** Plain text.
 *   **Structure:** One sentence per line.
 *   **Encoding:** UTF-8 (recommended for special characters).
@@ -51,30 +52,23 @@ Di mana kamar mandi?
 
 ## 🎙️ How to Run
 
-### Basic Usage (Default Voice: Charon)
-Run the script using the Python interpreter in your virtual environment:
+Ensure your virtual environment is active, then run the script:
 
+### Basic Usage
 ```bash
-# Ensure you are in /home/choppersmith/Code/tts/
-./venv/bin/python3 batch_generate_audio.py
+python batch_generate_audio.py
 ```
+*Default Voice: Charon (Deep, Informative)*
 
 ### Selecting a Specific Voice
 You can change the voice using the `--voice` argument.
 
 ```bash
 # Use the "Kore" voice (Firm tone)
-./venv/bin/python3 batch_generate_audio.py --voice Kore
+python batch_generate_audio.py --voice Kore
 
 # Use the "Puck" voice (Upbeat tone)
-./venv/bin/python3 batch_generate_audio.py --voice Puck
-```
-
-### Overwriting Existing Files
-By default, the script skips lines if the corresponding audio file already exists. To force regeneration, use the `--force` flag.
-
-```bash
-./venv/bin/python3 batch_generate_audio.py --force
+python batch_generate_audio.py --voice Puck
 ```
 
 **Common Voice Options:**
@@ -83,6 +77,13 @@ By default, the script skips lines if the corresponding audio file already exist
 *   `Puck` (Upbeat, Energetic)
 *   `Fenrir` (Excitable)
 *   `Aoede` (Breezy)
+
+### Overwriting Existing Files
+By default, the script **skips** generating audio for lines that already have a corresponding file in the `output_audio` folder. To force regeneration, use the `--force` flag.
+
+```bash
+python batch_generate_audio.py --force
+```
 
 ## 📂 Output
 
@@ -93,4 +94,4 @@ By default, the script skips lines if the corresponding audio file already exist
 ## ⚠️ Notes
 
 *   **Rate Limits:** The script includes a **60-second pause** between requests to respect the free tier rate limits (approx. 3 requests/minute).
-*   **File Skipping:** By default, the script **skips** generating audio for lines that already have a corresponding file in the `output_audio` folder. Use the `--force` flag to overwrite them.
+*   **File Skipping:** As mentioned, existing files are skipped unless `--force` is used.
