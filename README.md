@@ -1,97 +1,50 @@
-# Gemini TTS Batch Generator (Indonesian)
+# Google Cloud TTS Batch Generator (Indonesian)
 
-This project allows you to generate high-quality Indonesian audio files from a text list using Google's Gemini 2.5 Flash API. It is designed for language learners who want native-like pronunciation for study materials.
+This project allows you to generate high-quality Indonesian audio files from a text list using the Google Cloud Text-to-Speech API.
 
 ## 📋 Requirements
 
 *   **Python 3.12+**
-*   **Google Gemini API Key** (Free tier available at [aistudio.google.com](https://aistudio.google.com))
+*   **Google Cloud Project** with the "Cloud Text-to-Speech API" enabled.
+*   **Service Account JSON Key** saved as `service-account.json` in this directory.
 
-## 🚀 Installation & Setup
+## 🚀 Setup
 
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/mattzipan/batch-text-to-audio-using--Googles-TTS.git
-    cd batch-text-to-audio-using--Googles-TTS
-    ```
-
-2.  **Set up a Virtual Environment:**
-    ```bash
-    python3 -m venv venv
-    source venv/bin/activate
-    ```
-
-3.  **Install Dependencies:**
+1.  **Install Dependencies:**
     ```bash
     pip install -r requirements.txt
     ```
 
-4.  **Configure API Key:**
-    *   Rename `.env.example` to `.env`:
-        ```bash
-        cp .env.example .env
-        ```
-    *   Open `.env` and paste your Google Gemini API key:
-        ```text
-        GEMINI_API_KEY=AIzaSy...YourKeyHere...
-        ```
-
-## 📝 Input File Format
-
-Create a file named **`sentences.txt`** in the project directory.
-*   **Format:** Plain text.
-*   **Structure:** One sentence per line.
-*   **Encoding:** UTF-8 (recommended for special characters).
-
-**Example `sentences.txt`:**
-```text
-Selamat pagi, apa kabar?
-Saya ingin membeli dua nasi goreng.
-Di mana kamar mandi?
-```
+2.  **Credentials:**
+    *   Place your Google Cloud Service Account JSON file in the project root and rename it to `service-account.json`.
 
 ## 🎙️ How to Run
 
-Ensure your virtual environment is active, then run the script:
-
-### Basic Usage
+### Basic Usage (Default Voice: id-ID-Wavenet-A)
 ```bash
-python batch_generate_audio.py
+./venv/bin/python3 batch_generate_audio.py
 ```
-*Default Voice: Charon (Deep, Informative)*
 
 ### Selecting a Specific Voice
-You can change the voice using the `--voice` argument.
+Use the `--voice` argument to choose a different voice.
 
 ```bash
-# Use the "Kore" voice (Firm tone)
-python batch_generate_audio.py --voice Kore
-
-# Use the "Puck" voice (Upbeat tone)
-python batch_generate_audio.py --voice Puck
+# Use the Male Wavenet voice
+./venv/bin/python3 batch_generate_audio.py --voice id-ID-Wavenet-B
 ```
 
-**Common Voice Options:**
-*   `Charon` (Deep, Informative) - *Default*
-*   `Kore` (Firm, Clear)
-*   `Puck` (Upbeat, Energetic)
-*   `Fenrir` (Excitable)
-*   `Aoede` (Breezy)
+**Available Indonesian Voices:**
 
-### Overwriting Existing Files
-By default, the script **skips** generating audio for lines that already have a corresponding file in the `output_audio` folder. To force regeneration, use the `--force` flag.
-
-```bash
-python batch_generate_audio.py --force
-```
+| Voice Name | Gender | Type | Style/Note |
+| :--- | :--- | :--- | :--- |
+| `id-ID-Wavenet-A` | Female | Wavenet | Natural, clear, feminine. (Default) |
+| `id-ID-Wavenet-B` | Male | Wavenet | Natural, deep, masculine. |
+| `id-ID-Wavenet-C` | Male | Wavenet | Natural, alternative masculine tone. |
+| `id-ID-Wavenet-D` | Female | Wavenet | Natural, alternative feminine tone. |
+| `id-ID-Standard-A` | Female | Standard | Concatenative, clear but less natural. |
+| `id-ID-Standard-B` | Male | Standard | Concatenative, clear but less natural. |
 
 ## 📂 Output
 
-*   The script creates a folder named **`output_audio`**.
-*   Audio files are saved as `.wav` files (24kHz, 16-bit Mono).
-*   Files are numbered sequentially corresponding to the line number in your text file (e.g., `line_001.wav`, `line_002.wav`).
-
-## ⚠️ Notes
-
-*   **Rate Limits:** The script includes a **60-second pause** between requests to respect the free tier rate limits (approx. 3 requests/minute).
-*   **File Skipping:** As mentioned, existing files are skipped unless `--force` is used.
+*   Files are saved in the `output_audio` folder as `line_XXX.wav`.
+*   The script skips existing files unless the `--force` flag is used.
