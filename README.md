@@ -70,6 +70,13 @@ You can change the voice using the `--voice` argument.
 ./venv/bin/python3 batch_generate_audio.py --voice Puck
 ```
 
+### Overwriting Existing Files
+By default, the script skips lines if the corresponding audio file already exists. To force regeneration, use the `--force` flag.
+
+```bash
+./venv/bin/python3 batch_generate_audio.py --force
+```
+
 **Common Voice Options:**
 *   `Charon` (Deep, Informative) - *Default*
 *   `Kore` (Firm, Clear)
@@ -85,5 +92,5 @@ You can change the voice using the `--voice` argument.
 
 ## ⚠️ Notes
 
-*   **Rate Limits:** The script includes a 1-second pause between requests to respect the free tier rate limits.
-*   **File Overwrite:** Running the script again will overwrite existing files in the `output_audio` folder if they have the same line number.
+*   **Rate Limits:** The script includes a **60-second pause** between requests to respect the free tier rate limits (approx. 3 requests/minute).
+*   **File Skipping:** By default, the script **skips** generating audio for lines that already have a corresponding file in the `output_audio` folder. Use the `--force` flag to overwrite them.
