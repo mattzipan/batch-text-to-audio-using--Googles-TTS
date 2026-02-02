@@ -3,3 +3,4 @@ venv/
 output_audio/
 __pycache__/
 .obsidian/
+service-account.json
