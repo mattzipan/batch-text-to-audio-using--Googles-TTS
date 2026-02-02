@@ -17,6 +17,7 @@ This project allows you to generate high-quality Indonesian audio files from a t
 
 2.  **Credentials:**
     *   Place your Google Cloud Service Account JSON file in the project root and rename it to `service-account.json`.
+    *   **Important:** Ensure `service-account.json` is ignored by git to protect your credentials. The `.gitignore` file included in this repo handles this.
 
 ## 🎙️ How to Run
 
