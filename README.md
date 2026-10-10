@@ -115,3 +115,43 @@ Nama saya Matthias.
 
 Tests use mocked API clients — no network, no key needed. See `TODO.md` for the roadmap and
 `AGENTS.md` for project conventions.
+
+## 🖥️ WordTape (desktop app)
+
+WordTape turns a word list (`.txt`) or word+translation table (`.csv`) into a repeating
+"listen and repeat" drill track (`final.mp3`): pick source/target languages, auto-translate
+with Gemini, test voices, generate per-translation audio, then bake one track where every
+translation plays 5× with silence breaks. Projects persist in `~/WordTape/projects/` so single
+translations can be fixed and the track rebuilt later.
+
+### Run from source
+
+```bash
+./buildvenv/bin/python3 -m app.main            # native window (needs system WebKit)
+./buildvenv/bin/python3 -m app.main --server-only  # print URL, use any browser
+```
+
+The dev venv needs system packages visible: create it with
+`python3 -m venv buildvenv --system-site-packages` and install
+`requirements-dev.txt`.
+
+### Build the executable
+
+```bash
+./build.sh   # reads GEMINI_API_KEY from .env, bakes it in, writes dist/WordTape
+```
+
+`build.sh` copies a static ffmpeg (via `imageio-ffmpeg`) and your API key
+(`app/secrets.py`, gitignored) into a ~110 MB onefile binary. The key is recoverable
+from the binary with `strings` — acceptable for personal two-user use; do **not** upload
+the binary anywhere public, and rotate the key in AI Studio if it leaks.
+
+Copy `dist/WordTape` to the other machine and run it. One build covers Linux Mint and
+Zorin 18 (both Ubuntu 24.04-based, same glibc). If it ever fails with
+`GLIBC_x.y not found` on an older distro, use `./build-docker.sh` (untested Ubuntu 22.04
+container fallback).
+
+If the native window can't start (missing WebKit), the app automatically falls back to
+opening the system browser at its local URL. For the native window you need
+`python3-gi`, `python3-gi-cairo` and `gir1.2-webkit2-4.1` installed (present by default
+on Mint; on Zorin: `sudo apt install python3-gi python3-gi-cairo gir1.2-webkit2-4.1`).

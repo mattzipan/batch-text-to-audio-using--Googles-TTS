@@ -6,3 +6,10 @@ __pycache__/
 service-account.json
 CHAT.md
 .pytest_cache/
+buildvenv/
+app/secrets.py
+app/ffmpeg_bin/
+dist/
+build/
+projects/
+*.spec

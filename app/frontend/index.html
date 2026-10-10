@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WordTape</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">WordTape</span>
+  <span class="project-name" id="projectName">no project open</span>
+  <span class="dirty-dot" id="dirtyDot" hidden title="working"></span>
+  <ol class="stepper">
+    <li><button class="btn btn-ghost btn-sm" id="stepWords" data-goto="words" type="button"><span class="stepper-num" id="numWords">01</span><span class="stepper-label">Words</span></button></li>
+    <li><button class="btn btn-ghost btn-sm" id="stepVoice" data-goto="voice" type="button"><span class="stepper-num" id="numVoice">02</span><span class="stepper-label">Voice</span></button></li>
+    <li><button class="btn btn-ghost btn-sm" id="stepBake" data-goto="bake" type="button"><span class="stepper-num" id="numBake">03</span><span class="stepper-label">Bake</span></button></li>
+  </ol>
+</header>
+<div class="content">
+
+  <section class="screen" data-screen="words" id="screenWords">
+    <p class="hero" style="--i:0">Turn words into a drill tape.</p>
+    <div class="card" style="--i:1">
+      <h2 class="section-title">Project</h2>
+      <div class="field">
+        <label for="newName">Project name</label>
+        <input type="text" id="newName" placeholder="my-drill-tape">
+      </div>
+      <div class="field">
+        <label for="newSource">Source language</label>
+        <select id="newSource">
+          <option value="de" selected>German (de)</option>
+          <option value="en">English (en)</option>
+          <option value="id">Indonesian (id)</option>
+          <option value="da">Danish (da)</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="newTarget">Target language</label>
+        <select id="newTarget">
+          <option value="de">German (de)</option>
+          <option value="en">English (en)</option>
+          <option value="id" selected>Indonesian (id)</option>
+          <option value="da">Danish (da)</option>
+        </select>
+      </div>
+      <div class="field">
+        <button class="btn btn-ghost btn-sm" id="swapLangs" type="button" aria-label="Swap source and target languages">⇄</button>
+      </div>
+      <div class="field">
+        <span class="switch-row">
+          <span class="switch"><input type="checkbox" id="variantsSwitch"><span class="track"></span></span>
+          <label for="variantsSwitch">Also make formal + informal versions</label>
+        </span>
+      </div>
+      <button class="btn btn-primary" id="newProjectBtn" type="button">New project</button>
+    </div>
+    <div class="card" style="--i:2">
+      <h2 class="section-title">Open project</h2>
+      <div class="field">
+        <label for="openPath">Project folder path</label>
+        <input type="text" id="openPath" placeholder="/home/you/WordTape/projects/my-drill-tape">
+      </div>
+      <button class="btn" id="openBtn" type="button">Open</button>
+      <div class="field">
+        <span class="hint">Recent projects</span>
+        <div id="recentList"></div>
+      </div>
+    </div>
+    <div class="card" style="--i:3">
+      <h2 class="section-title">Import words</h2>
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Import a .txt or .csv file">
+        <p id="dropText">No words yet — drop a .txt or .csv here and let's cook.</p>
+        <input type="file" id="fileInput" accept=".txt,.csv" hidden>
+      </div>
+      <div class="field">
+        <span class="switch-row">
+          <span class="switch"><input type="checkbox" id="hasHeader"><span class="track"></span></span>
+          <label for="hasHeader">CSV has header row</label>
+        </span>
+      </div>
+    </div>
+    <div class="card" style="--i:4">
+      <h2 class="section-title">Rows</h2>
+      <button class="btn btn-primary" id="translateBtn" type="button">Translate missing rows</button>
+      <div class="row-table" id="rowsTable"></div>
+    </div>
+    <div class="card" style="--i:5">
+      <h2 class="section-title">Add a row at the end</h2>
+      <div class="field">
+        <label for="addSource">Source text</label>
+        <input type="text" id="addSource" placeholder="Guten Abend">
+      </div>
+      <div class="field">
+        <label for="addTranslation">Translation (optional)</label>
+        <input type="text" id="addTranslation" placeholder="Selamat malam">
+      </div>
+      <button class="btn" id="addRowBtn" type="button">Add row</button>
+      <div class="field">
+        <label for="addAtN">at row #</label>
+        <input type="number" id="addAtN" min="1" step="1" value="1">
+      </div>
+      <button class="btn" id="addAtBtn" type="button">Add at row</button>
+    </div>
+  </section>
+
+  <section class="screen" data-screen="voice" id="screenVoice" hidden>
+    <h2 class="section-title" style="--i:0">Voice</h2>
+    <div class="card" style="--i:1">
+      <div class="field">
+        <label for="modelSelect">Model</label>
+        <select id="modelSelect">
+          <option value="gemini-3.8-flash-lite-tts" selected>gemini-3.8-flash-lite-tts — cheap workhorse (default)</option>
+          <option value="gemini-3.8-flash-tts">gemini-3.8-flash-tts — flagship quality</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="voiceSelect">Voice</label>
+        <select id="voiceSelect"></select>
+        <span class="hint">Voices are multi-language — language tags on some voices are incomplete.</span>
+      </div>
+      <div class="field">
+        <label for="sampleText">Sample text</label>
+        <input type="text" id="sampleText" value="Selamat pagi. Ini contoh suara.">
+      </div>
+      <button class="btn" id="testVoiceBtn" type="button">Make some noise</button>
+      <audio id="testAudio" controls hidden></audio>
+    </div>
+    <div class="card" style="--i:2">
+      <h2 class="section-title">Generate</h2>
+      <p><span class="hint">Existing ok audio is skipped — only stale and missing clips are baked, unless forced.</span></p>
+      <div class="field">
+        <span class="switch-row">
+          <span class="switch"><input type="checkbox" id="forceRegen"><span class="track"></span></span>
+          <label for="forceRegen">Force regenerate everything</label>
+        </span>
+      </div>
+      <button class="btn btn-primary" id="generateBtn" type="button">Bake 0 clips</button>
+      <div class="progress" id="voiceProgress"><i id="voiceProgressFill"></i></div>
+      <p id="voiceProgressText"></p>
+      <button class="btn btn-ghost btn-sm" id="cancelVoiceBtn" type="button" hidden>Cancel</button>
+    </div>
+  </section>
+
+  <section class="screen" data-screen="bake" id="screenBake" hidden>
+    <h2 class="section-title" style="--i:0">Bake</h2>
+    <div class="card" style="--i:1">
+      <h2 class="section-title">Settings</h2>
+      <div class="field">
+        <label for="repeatsInput">Plays per translation</label>
+        <input type="number" id="repeatsInput" min="1" max="10" step="1" value="5">
+      </div>
+      <div class="field">
+        <label for="repeatGapInput">Break between plays (s)</label>
+        <input type="number" id="repeatGapInput" min="0" step="0.1" value="1.2">
+      </div>
+      <div class="field">
+        <label for="itemGapInput">Gap between items (s)</label>
+        <input type="number" id="itemGapInput" min="0" step="0.1" value="1.8">
+      </div>
+      <p id="estimate">Estimate: —</p>
+    </div>
+    <div class="card" style="--i:2">
+      <h2 class="section-title">Include in tape</h2>
+      <div id="inclusionList"></div>
+    </div>
+    <div class="card" style="--i:3">
+      <button class="btn btn-primary" id="buildBtn" type="button">Build the drill tape</button>
+      <div class="progress" id="bakeProgress"><i id="bakeProgressFill"></i></div>
+      <p id="bakeProgressText"></p>
+      <button class="btn btn-ghost btn-sm" id="cancelBakeBtn" type="button" hidden>Cancel</button>
+    </div>
+    <div class="card" style="--i:4" id="successCard" hidden>
+      <h2 class="section-title">Your tape</h2>
+      <audio id="finalAudio" controls></audio>
+      <p><a class="btn" id="downloadMp3" download>Download MP3</a> <a class="btn btn-ghost" id="downloadWav" download>Download WAV</a></p>
+      <p>Output folder: <span class="mono" id="outputPath"></span></p>
+    </div>
+  </section>
+
+</div>
+<div id="toasts" aria-live="polite"></div>
+<div class="modal-backdrop" id="modalBackdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-label="Confirm delete">
+    <h3>Delete this row and its audio?</h3>
+    <div class="modal-actions">
+      <button class="btn" id="modalKeep" type="button">Keep it</button>
+      <button class="btn btn-danger" id="modalDelete" type="button">Delete</button>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

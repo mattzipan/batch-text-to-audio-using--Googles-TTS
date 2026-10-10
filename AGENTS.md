@@ -15,6 +15,8 @@ or any language-specific assumptions into the code.
 - `google-genai>=2.25.0` — Gemini backend (auth: `GEMINI_API_KEY` env var, `GOOGLE_API_KEY` also works)
 - `google-cloud-texttospeech` — optional Cloud TTS fallback backend (auth: `service-account.json`)
 - `pytest` — tests with mocked API clients
+- `fastapi` + `uvicorn` — WordTape local server; `pywebview` — native window;
+  `imageio-ffmpeg` — static ffmpeg binary source (build time)
 
 ## Layout
 
@@ -22,7 +24,14 @@ or any language-specific assumptions into the code.
 - `backends/` — `base.py` (`TTSBackend` ABC + request/result dataclasses), `gemini.py`, `cloud_tts.py`
 - `sentences.txt` — input, one sentence per line, UTF-8
 - `output_audio/line_XXX.wav` — output, 24 kHz mono 16-bit WAV
-- `tests/` — mocked unit tests
+- `app/` — WordTape desktop app: `main.py` (webview shell + browser fallback),
+  `server.py` (FastAPI), `project.py` (project.json + row ops), `translate.py`
+  (`gemini-3.5-flash-lite`), `tts.py` (wraps `backends/`), `assembler.py` (pure-Python
+  WAV concat), `jobs.py`, `boot.py`, `config.py`, `frontend/` (vanilla HTML/CSS/JS,
+  no build step), `ffmpeg_bin/` (gitignored, build-time copy)
+- `build.sh` — onefile PyInstaller build (bakes `.env` key into `app/secrets.py`,
+  gitignored); `build-docker.sh` — glibc fallback build (untested)
+- `tests/` — mocked unit tests (CLI + app)
 - `TODO.md` / `TODO-DONE.md` — the tracker (see Workflow)
 
 ## Gemini TTS facts (3.8)
@@ -38,22 +47,24 @@ or any language-specific assumptions into the code.
 
 - **Git:** commit code changes after successful implementation and verification.
 - **Docs/dep sync:** keep `README.md` and `requirements.txt` up to date with any code changes.
-- **Credentials:** `service-account.json` and `.env` are gitignored. Never commit secrets or API keys.
-- **Backend boundary:** both backends implement the `TTSBackend` ABC with `synthesize_many(items, *, progress, cancel)`. The future interface will import `backends/` directly — keep this boundary stable (progress callback + cancel check included).
+- **Credentials:** `service-account.json` and `.env` are gitignored. Never commit secrets or API keys. Exception: `build.sh` bakes `.env`'s key into `app/secrets.py` (gitignored) for the personal-use binary only.
+- **Backend boundary:** both backends implement the `TTSBackend` ABC with `synthesize_many(items, *, progress, cancel)`. WordTape (`app/tts.py`) imports `backends/` directly — keep this boundary stable (progress callback + cancel check included).
+- **Frontend:** plain HTML/CSS/JS, no build step. Design tokens live in `app/frontend/styles.css`; user-visible strings follow the microcopy list in the WordTape spec (`TODO-DONE.md`).
 - **Output contract:** files are `output_audio/line_XXX.wav` (24 kHz mono 16-bit WAV); existing files are skipped unless `--force`.
 
-## Future interface (see `IDEA.md`)
+## WordTape interface (built 2026-10-10, see `IDEA.md` for the original options)
 
-The next phase is a small interface for 2–3 users, with deployment options sketched in `IDEA.md`
-(SQLite storage; either a PyInstaller-packaged desktop app with a local FastAPI/browser window, or
-static Astro + serverless API, or pure static with browser-local data). Implications for today's
-code:
+WordTape is the desktop interface (2 users): pywebview native window over a local
+FastAPI server, JSON project files in `~/WordTape/projects/`, PyInstaller onefile
+(`dist/WordTape`, built on Mint, runs on Zorin 18). Implications that remain in force:
 
 - `backends/` must stay importable as a plain library — no CLI imports, no global state, no
   prints inside the backends package.
 - Keep the `synthesize_many(items, progress, cancel)` boundary stable: progress and cancel are
-  how the UI will drive a run.
+  how the UI drives a run.
 - Avoid server-side or environment-specific assumptions in the backend layer.
+- App modules import `backends` lazily/inside functions where possible so `import app.x`
+  never requires credentials or a display.
 
 ## Workflow
 

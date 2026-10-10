@@ -2,3 +2,6 @@
 google-genai>=2.25.0
 google-cloud-texttospeech
 python-dotenv
+fastapi
+uvicorn
+pywebview
