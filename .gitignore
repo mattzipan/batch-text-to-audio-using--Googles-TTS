@@ -5,3 +5,4 @@ __pycache__/
 .obsidian/
 service-account.json
 CHAT.md
+.pytest_cache/
