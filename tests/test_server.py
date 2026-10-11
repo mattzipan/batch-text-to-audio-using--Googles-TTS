@@ -9,6 +9,7 @@ isolated per test.
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 import time
 from typing import Any
 
@@ -25,7 +26,8 @@ from backends.base import VoiceInfo
 
 @pytest.fixture()
 def _isolated(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("WORDTAPE_DATA_DIR", str(tmp_path / "projects"))
+    monkeypatch.setenv("WORDTAPE_EXPORT_DIR", str(tmp_path / "export"))
     server_mod.current = None
     with jobs_mod._lock:
         jobs_mod._jobs.clear()
@@ -144,7 +146,7 @@ def test_state_empty_and_guards(client):
     assert client.post("/api/tts/generate", json={}).status_code == 409
     assert client.post("/api/track/build").status_code == 409
     assert client.get("/api/track").status_code == 409
-    assert client.get("/media/output/final.mp3").status_code == 409
+    assert client.get("/media/audio/x.wav").status_code == 409
 
 
 def test_project_new_validation(client):
@@ -304,8 +306,9 @@ def test_track_build_and_info(client, monkeypatch):
     monkeypatch.setattr(server_mod.tts, "generate_audio", _fake_generate)
 
     def _fake_build(project, included, repeats=5, repeat_gap_s=1.2,
-                    item_gap_s=1.8, **kwargs):
-        out = project.folder / "output"
+                    item_gap_s=1.8, out_dir=None, **kwargs):
+        from app import config as _cfg
+        out = out_dir or _cfg.export_dir(project.folder.name)
         out.mkdir(parents=True, exist_ok=True)
         (out / "final.wav").write_bytes(b"wav-bytes")
         (out / "final.mp3").write_bytes(b"mp3-bytes")
@@ -331,14 +334,14 @@ def test_track_build_and_info(client, monkeypatch):
 
     info = client.get("/api/track")
     assert info.status_code == 200, info.text
-    assert info.json() == {
-        "exists": True,
-        "wav_url": "/media/output/final.wav",
-        "mp3_url": "/media/output/final.mp3",
-        "duration_s": 7.25,
-    }
+    body = info.json()
+    assert body["exists"] is True
+    assert body["wav_url"] == "/export/final.wav"
+    assert body["mp3_url"] == "/export/final.mp3"
+    assert body["duration_s"] == 7.25
+    assert Path(body["output_dir"]).name == "demo"
 
-    media = client.get("/media/output/final.mp3")
+    media = client.get("/export/final.mp3")
     assert media.status_code == 200
     assert media.content == b"mp3-bytes"
 

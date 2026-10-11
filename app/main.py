@@ -117,7 +117,10 @@ def main(argv=None) -> None:
             resizable=True,
             js_api=Api(),
         )
-        webview.start()
+        webview.start(
+            private_mode=False,
+            storage_path=str(config.app_root() / ".webview"),
+        )
     except Exception as err:
         print(
             f"Webview unavailable ({err}), falling back to browser. "

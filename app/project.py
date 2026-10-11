@@ -4,7 +4,6 @@ Storage layout inside a project folder::
 
     <folder>/project.json          versioned JSON document (see below)
     <folder>/audio/                per-variant WAV cache
-    <folder>/output/               built ``final.wav`` / ``final.mp3``
 
 ``project.json`` shape (version 1)::
 
@@ -39,7 +38,7 @@ Decisions (documented per task A2):
   variants are added later by the translation step when ``variants_enabled``.
 - ``delete_row`` removes the row's canonical cached WAVs (see :func:`audio_path`)
   when present and ignores missing files.
-- ``save_project`` creates ``folder/``, ``audio/`` and ``output/`` as needed
+- ``save_project`` creates ``folder/`` and ``audio/`` as needed (built tracks live in the export dir)
   and writes atomically (``project.json.tmp`` + ``os.replace``).
 """
 
@@ -216,10 +215,9 @@ def _project_to_dict(project: Project) -> dict:
 
 
 def save_project(project: Project) -> Path:
-    """Persist ``project.json`` atomically; create folder/audio/output dirs."""
+    """Persist ``project.json`` atomically; create folder/audio dirs."""
     project.folder.mkdir(parents=True, exist_ok=True)
     (project.folder / "audio").mkdir(exist_ok=True)
-    (project.folder / "output").mkdir(exist_ok=True)
     target = project.folder / PROJECT_FILENAME
     tmp = project.folder / (PROJECT_FILENAME + ".tmp")
     tmp.write_text(

@@ -20,6 +20,7 @@ import subprocess
 import wave
 from pathlib import Path
 
+from app import config
 from app.project import Project, audio_path
 
 WAV_PARAMS: tuple[int, int, int] = (24000, 1, 2)  # (framerate, nchannels, sampwidth)
@@ -120,11 +121,13 @@ def build_track(
     repeats: int = 5,
     repeat_gap_s: float = 1.2,
     item_gap_s: float = 1.8,
+    out_dir: Path | None = None,
 ) -> dict[str, object]:
     """Assemble the drill tape and encode MP3.
 
-    Writes ``output/final.wav`` (streamed, incremental frames) then
-    ``output/final.mp3`` via bundled ffmpeg (libmp3lame, 128k).
+    Writes ``final.wav`` (streamed, incremental frames) then ``final.mp3``
+    via bundled ffmpeg (libmp3lame, 128k) into ``out_dir`` (default: the
+    project's export dir — Music, or output/ next to the app as fallback).
 
     Returns:
         ``{"wav": str, "mp3": str, "duration_s": float}``.
@@ -141,8 +144,9 @@ def build_track(
     repeat_gap_frames = _gap_frames(repeat_gap_s)
     item_gap_frames = _gap_frames(item_gap_s)
 
-    out_dir = project.folder / "output"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if out_dir is None:
+        out_dir = config.export_dir(project.folder.name)
+    out_dir.mkdir(parents=True, exist_ok=True)  # the one place we create it
     wav_path = out_dir / "final.wav"
     mp3_path = out_dir / "final.mp3"
 

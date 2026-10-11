@@ -13,3 +13,7 @@ dist/
 build/
 projects/
 *.spec
+output/
+.webview/
+*.mp3
+*.wav

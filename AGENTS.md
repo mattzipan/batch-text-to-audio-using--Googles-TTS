@@ -55,7 +55,8 @@ or any language-specific assumptions into the code.
 ## WordTape interface (built 2026-10-10, see `IDEA.md` for the original options)
 
 WordTape is the desktop interface (2 users): pywebview native window over a local
-FastAPI server, JSON project files in `~/WordTape/projects/`, PyInstaller onefile
+FastAPI server, JSON project files in `projects/` next to the app (exports to `~/Music/WordTape/`,
+fallback `output/` next to the exe), PyInstaller onefile
 (`dist/WordTape`, built on Mint, runs on Zorin 18). Implications that remain in force:
 
 - `backends/` must stay importable as a plain library — no CLI imports, no global state, no

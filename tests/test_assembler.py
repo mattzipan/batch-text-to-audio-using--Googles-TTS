@@ -59,6 +59,11 @@ def _sine_frames(seconds: float, freq: float = 440.0, amp: int = 10000) -> bytes
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_export(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORDTAPE_EXPORT_DIR", str(tmp_path / "export"))
+
+
 @pytest.fixture
 def project(tmp_path: Path) -> tuple[Project, list[tuple[str, str]], bytes, bytes]:
     """Scratch project with two cached clips; returns (project, ids, sine, zeros)."""
@@ -121,7 +126,7 @@ def test_build_track_golden_byte_length(
         proj, included, repeats=REPEATS, repeat_gap_s=REPEAT_GAP_S, item_gap_s=ITEM_GAP_S
     )
     expected_frames = _expected_frames()
-    assert result["wav"].endswith("output/final.wav")
+    assert result["wav"].endswith("final.wav")
     params, frames = _read_output_frames(str(result["wav"]))
     assert params == WAV_PARAMS
     assert len(frames) == expected_frames * 2

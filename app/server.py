@@ -36,8 +36,8 @@ _DEFAULT_TTS_MODEL = "gemini-3.8-flash-lite-tts"
 
 
 def projects_root() -> Path:
-    """Return the per-user projects directory (created on demand)."""
-    return Path.home() / "WordTape" / "projects"
+    """Return the projects directory (inside the app folder; created on demand)."""
+    return config.projects_root()
 
 
 async def _body(request: Request) -> dict[str, Any]:
@@ -92,8 +92,9 @@ def _project_meta(proj: Project) -> dict[str, Any]:
 
 
 def _track_info(proj: Project) -> dict[str, Any]:
-    wav = proj.folder / "output" / "final.wav"
-    mp3 = proj.folder / "output" / "final.mp3"
+    out_dir = config.export_dir(proj.folder.name)
+    wav = out_dir / "final.wav"
+    mp3 = out_dir / "final.mp3"
     included = [
         (row.id, variant.id)
         for row in proj.rows
@@ -116,9 +117,10 @@ def _track_info(proj: Project) -> dict[str, Any]:
             duration = None
     return {
         "exists": wav.is_file() and mp3.is_file(),
-        "wav_url": "/media/output/final.wav" if wav.is_file() else None,
-        "mp3_url": "/media/output/final.mp3" if mp3.is_file() else None,
+        "wav_url": "/export/final.wav" if wav.is_file() else None,
+        "mp3_url": "/export/final.mp3" if mp3.is_file() else None,
         "duration_s": duration,
+        "output_dir": str(out_dir),
     }
 
 
@@ -273,6 +275,7 @@ def _track_run(job: jobs.Job, wanted: list[tuple[str, str]] | None = None) -> No
         repeats=proj.repeats,
         repeat_gap_s=proj.repeat_gap_s,
         item_gap_s=proj.item_gap_s,
+        out_dir=config.export_dir(proj.folder.name),
     )
     with _state_lock:
         projects.save_project(proj)
@@ -712,6 +715,17 @@ def create_app() -> FastAPI:
         if not jobs.cancel_job(id):
             raise HTTPException(status_code=404, detail=f"unknown job {id!r}")
         return {"cancelled": True}
+
+    @app.get("/export/{path:path}")
+    def api_export(path: str) -> FileResponse:
+        proj = _require_project()
+        root = config.export_dir(proj.folder.name).resolve()
+        target = (root / path).resolve()
+        if not target.is_relative_to(root):
+            raise HTTPException(status_code=404, detail="not found")
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        return FileResponse(str(target))
 
     @app.get("/media/{path:path}")
     def api_media(path: str) -> FileResponse:

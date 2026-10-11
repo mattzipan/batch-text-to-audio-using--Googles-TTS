@@ -121,7 +121,10 @@ Tests use mocked API clients — no network, no key needed. See `TODO.md` for th
 WordTape turns a word list (`.txt`) or word+translation table (`.csv`) into a repeating
 "listen and repeat" drill track (`final.mp3`): pick source/target languages, auto-translate
 with Gemini, test voices, generate per-translation audio, then bake one track where every
-translation plays 5× with silence breaks. Projects persist in `~/WordTape/projects/` so single
+translation plays 5× with silence breaks. Finished tracks are exported to the system **Music**
+folder (`~/Music/WordTape/<project>/`; fallback `output/<project>/` next to the executable).
+Working data lives in `projects/` next to the executable (or the repo root in dev) so nothing is
+written outside the app folder. Projects persist so single
 translations can be fixed and the track rebuilt later.
 
 ### Run from source

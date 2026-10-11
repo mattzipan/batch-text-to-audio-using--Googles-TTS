@@ -45,7 +45,7 @@ def test_save_load_roundtrip(tmp_path: Path) -> None:
     target = save_project(project)
     assert target.name == PROJECT_FILENAME
     assert (project.folder / "audio").is_dir()
-    assert (project.folder / "output").is_dir()
+    assert (project.folder / "audio").is_dir()  # built tracks live in the export dir, not here
     assert not (project.folder / (PROJECT_FILENAME + ".tmp")).exists()
 
     raw = json.loads((project.folder / PROJECT_FILENAME).read_text(encoding="utf-8"))
@@ -184,3 +184,29 @@ def test_load_repairs_duplicate_ids(tmp_path: Path) -> None:
     ids = [row.id for row in loaded.rows]
     vids = [v.id for row in loaded.rows for v in row.variants]
     assert len(set(ids + vids)) == len(ids) + len(vids)
+
+
+def test_export_dir_music_and_fallback(tmp_path, monkeypatch):
+    """Exports go to the Music dir; fallback output/ next to the app."""
+    from app import config
+
+    music = tmp_path / "Music"
+    music.mkdir()
+    monkeypatch.setenv("XDG_MUSIC_DIR", str(music))
+    monkeypatch.delenv("WORDTAPE_EXPORT_DIR", raising=False)
+    assert config.export_dir("demo") == music / "WordTape" / "demo"
+
+    monkeypatch.setenv("XDG_MUSIC_DIR", str(tmp_path / "gone"))  # unavailable
+    monkeypatch.setattr(config, "app_root", lambda: tmp_path / "approot")
+    assert config.export_dir("demo") == tmp_path / "approot" / "output" / "demo"
+
+    monkeypatch.setenv("WORDTAPE_EXPORT_DIR", str(tmp_path / "custom"))
+    assert config.export_dir("demo") == tmp_path / "custom" / "demo"
+
+
+def test_export_dir_makes_no_dirs(tmp_path, monkeypatch):
+    from app import config
+
+    monkeypatch.setenv("WORDTAPE_EXPORT_DIR", str(tmp_path / "never"))
+    config.export_dir("demo")
+    assert not (tmp_path / "never").exists()

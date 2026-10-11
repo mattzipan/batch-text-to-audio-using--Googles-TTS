@@ -575,7 +575,7 @@ function renderBake() {
     $("finalAudio").src = track.mp3_url;
     $("downloadMp3").href = track.mp3_url;
     $("downloadWav").href = track.wav_url;
-    $("outputPath").textContent = state.project.path + "/output";
+    $("outputPath").textContent = track.output_dir || state.project.path;
   } else {
     $("successCard").hidden = true;
   }

@@ -41,11 +41,52 @@ def get_api_key() -> str:
     )
 
 
-def ensure_app_dirs() -> Path:
-    """Create and return the per-user app data dir (~/.local/share/WordTape/)."""
-    app_dir = Path.home() / ".local" / "share" / APP_NAME
-    app_dir.mkdir(parents=True, exist_ok=True)
-    return app_dir
+def app_root() -> Path:
+    """Writable app directory: the exe's folder when frozen, repo root in dev.
+
+    Nothing is ever written outside this tree except exported tracks in the
+    system Music directory (see export_dir).
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def projects_root() -> Path:
+    """Working data root (project.json + per-translation audio cache)."""
+    root = Path(os.environ["WORDTAPE_DATA_DIR"]) if os.environ.get("WORDTAPE_DATA_DIR") \
+        else app_root() / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def music_dir() -> Path | None:
+    """System Music directory if available, else None (XDG-aware)."""
+    raw = os.environ.get("XDG_MUSIC_DIR")
+    if not raw:
+        cfg = Path.home() / ".config" / "user-dirs.dirs"
+        if cfg.is_file():
+            for line in cfg.read_text().splitlines():
+                if line.startswith("XDG_MUSIC_DIR="):
+                    raw = line.split("=", 1)[1].strip().strip('"')
+                    raw = raw.replace("$HOME", str(Path.home()))
+                    break
+    cand = Path(raw) if raw else Path.home() / "Music"
+    return cand if cand.is_dir() else None
+
+
+def export_dir(project_name: str) -> Path:
+    """Final track destination: ~/Music/WordTape/<project>/, else <app>/output/<project>/.
+
+    WORDTAPE_EXPORT_DIR overrides both (used by tests and as an escape hatch).
+    """
+    env = os.environ.get("WORDTAPE_EXPORT_DIR")
+    if env:
+        root = Path(env)
+    else:
+        music = music_dir()
+        root = (music / APP_NAME) if music else (app_root() / "output")
+    return root / project_name
 
 
 def apply_api_key_to_env() -> str:
