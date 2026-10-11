@@ -127,6 +127,34 @@ Working data lives in `projects/` next to the executable (or the repo root in de
 written outside the app folder. Projects persist so single
 translations can be fixed and the track rebuilt later.
 
+### Settings (⚙ in the top bar)
+
+*   **Gemini API key** — replaceable per machine, no rebuild needed. Saved to
+    `~/.local/share/WordTape/settings.json` (`$XDG_DATA_HOME/WordTape/settings.json`, file mode
+    `0600`, dir `0700`, gitignored) and applied immediately — Translate/TTS pick it up without a
+    restart. Resolution order: **Settings key → `GEMINI_API_KEY` env → key baked in at build
+    time** (`app/secrets.py`). `GOOGLE_API_KEY` is ignored by the app (the CLI above still
+    honors it). "Remove key" clears the saved key and falls back to env/baked. The key is never
+    shown back in full — only its last 4 characters.
+*   **Output folder** — where finished tracks land (default `~/Music/WordTape/<project>/`,
+    fallback `output/<project>/` next to the executable). An absolute custom root overrides both
+    the default and `WORDTAPE_EXPORT_DIR`; "Reset to default" restores the default chain. Saved
+    tracks are never migrated — old exports stay where they were written.
+
+### Costs (estimates)
+
+Every billable action (Translate, Bake/Generate, voice sample) shows a local **estimate** —
+`(~$X est.)` in the completion toast — computed as the response's `usageMetadata` token counts
+× the published Standard-tier price table (`app/costs.py`). These are **estimates only**: the
+Gemini API reports tokens, never dollars, so authoritative spend lives in **AI Studio Billing**.
+The ⚙ Settings → *Costs (estimates)* card accumulates the same estimates per calendar month
+(current month line + a `Month | Translate | Voice | Total | Calls` history table) in a local
+ledger at `~/.local/share/WordTape/costs.json` (`$XDG_DATA_HOME/WordTape/costs.json`,
+gitignored; no API keys are ever stored in it). TTS prices are **introductory through
+Dec 31, 2026 and double on Jan 1, 2027** — the table applies that doubling automatically;
+retry calls are counted too. Unknown usage never renders `$0.00` — the suffix and the estimate
+simply stay absent.
+
 ### Run from source
 
 ```bash
@@ -138,6 +166,10 @@ The dev venv needs system packages visible: create it with
 `python3 -m venv buildvenv --system-site-packages` and install
 `requirements-dev.txt`.
 
+The native window's minimum size is 640×400, so tiling shortcuts (Super+Left/Right,
+drag-to-edge) can snap it to half of a 1080p/HiDPI-scaled screen. Below 900px the UI
+collapses to one column and the rows table scrolls horizontally instead of reflowing.
+
 ### Build the executable
 
 ```bash
@@ -147,7 +179,9 @@ The dev venv needs system packages visible: create it with
 `build.sh` copies a static ffmpeg (via `imageio-ffmpeg`) and your API key
 (`app/secrets.py`, gitignored) into a ~110 MB onefile binary. The key is recoverable
 from the binary with `strings` — acceptable for personal two-user use; do **not** upload
-the binary anywhere public, and rotate the key in AI Studio if it leaks.
+the binary anywhere public, and rotate the key in AI Studio if it leaks. The baked key is
+only the fallback: each machine can override it with its own key in **⚙ Settings** (see
+Settings above), applied without a rebuild.
 
 Copy `dist/WordTape` to the other machine and run it. One build covers Linux Mint and
 Zorin 18 (both Ubuntu 24.04-based, same glibc). If it ever fails with

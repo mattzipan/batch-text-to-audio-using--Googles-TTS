@@ -19,7 +19,13 @@ from dataclasses import dataclass
 
 @dataclass
 class Job:
-    """A single background job. Mutated in place by its worker thread."""
+    """A single background job. Mutated in place by its worker thread.
+
+    ``cost_est`` is the local USD *estimate* for the billable run (spec
+    F11/F12), set only on success when the backend reported usage. It is
+    omitted from :meth:`to_dict` while ``None`` so consumers can treat an
+    absent ``cost_est`` as "no estimate" (never ``$0.00`` for unknown).
+    """
 
     id: str
     kind: str
@@ -28,10 +34,15 @@ class Job:
     message: str = ""
     error: str | None = None
     cancelled: bool = False
+    cost_est: float | None = None
 
     def to_dict(self) -> dict[str, object]:
-        """Return a JSON-serializable snapshot of this job."""
-        return {
+        """Return a JSON-serializable snapshot of this job.
+
+        Shape: ``{id, kind, done, total, message, error, cancelled}`` plus
+        ``cost_est`` (float USD) only when a known estimate exists.
+        """
+        payload: dict[str, object] = {
             "id": self.id,
             "kind": self.kind,
             "done": self.done,
@@ -40,6 +51,9 @@ class Job:
             "error": self.error,
             "cancelled": self.cancelled,
         }
+        if self.cost_est is not None:
+            payload["cost_est"] = self.cost_est
+        return payload
 
 
 _lock = threading.Lock()

@@ -55,6 +55,36 @@ function fmtDur(totalS) {
   return m > 0 ? m + "m " + r + "s" : r + "s";
 }
 
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+// Mirrors app.costs.fmt_est: 4 decimals under $0.01, else 2 — always an
+// estimate ("~$…"), never a final cost.
+function fmtEst(usd) {
+  const n = Number(usd);
+  return n < 0.01 ? "~$" + n.toFixed(4) : "~$" + n.toFixed(2);
+}
+
+function estSuffix(usd) {
+  return " (" + fmtEst(usd) + " est.)";
+}
+
+// Generate-job completion toast (spec F11): fires only when the server
+// reported a known estimate — without one, today's silent behavior stands.
+function toastBaked(job) {
+  if (job.error || job.cancelled || job.cost_est == null) return;
+  const n = job.done;
+  toast("Baked " + n + (n === 1 ? " clip" : " clips") + estSuffix(job.cost_est));
+}
+
+function monthLabel(key) {
+  const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(key));
+  if (!m) return String(key);
+  return MONTH_NAMES[Number(m[2]) - 1] + " " + m[1];
+}
+
 function loadRecent() {
   try {
     const raw = localStorage.getItem(RECENT_KEY);
@@ -120,6 +150,9 @@ function goto(name) {
   if (name === "bake") {
     updateEstimate();
   }
+  if (name === "settings") {
+    loadSettings();
+  }
 }
 
 async function refresh() {
@@ -159,6 +192,8 @@ function statusChip(status) {
   if (status === "ok") el.className = "chip chip-ok";
   else if (status === "stale") el.className = "chip chip-stale";
   else if (status === "error") el.className = "chip chip-error";
+  else if (status === "pending") el.className = "chip chip-pending";
+  else if (status === "generating") el.className = "chip chip-generating pulse";
   el.textContent = status;
   return el;
 }
@@ -243,7 +278,7 @@ function renderRows() {
         const wrap = document.createElement("div");
         wrap.appendChild(styleChip(v.style));
         const text = document.createElement("span");
-        text.textContent = " " + (v.text || "—");
+        text.textContent = v.text || "—";
         wrap.appendChild(text);
         wrap.appendChild(statusChip(v.status));
         trans.appendChild(wrap);
@@ -329,8 +364,9 @@ async function regenRow(row) {
     method: "POST",
     body: { variant_ids: ids, force: true },
   });
-  startPoll(data.job_id, "voice", async () => {
+  startPoll(data.job_id, "voice", async (job) => {
     await refresh();
+    toastBaked(job);
   });
 }
 
@@ -356,7 +392,12 @@ async function doTranslate() {
   const data = await api("/api/translate", { method: "POST", body: {} });
   startPoll(data.job_id, "voice", async (job) => {
     await refresh();
-    if (!job.error && !job.cancelled) toast("Translated " + job.done + " rows.");
+    if (!job.error && !job.cancelled) {
+      toast(
+        "Translated " + job.done + " rows." +
+          (job.cost_est != null ? estSuffix(job.cost_est) : "")
+      );
+    }
   });
 }
 
@@ -498,6 +539,12 @@ async function testVoice() {
   player.src = testBlobUrl;
   player.hidden = false;
   player.play();
+  // Estimate rides in a response header (spec F11); no header → no toast.
+  const estRaw = res.headers.get("X-Est-Cost-USD");
+  const est = Number(estRaw);
+  if (estRaw != null && estRaw !== "" && Number.isFinite(est)) {
+    toast("Sample ready" + estSuffix(est));
+  }
 }
 
 async function generateAll() {
@@ -506,8 +553,9 @@ async function generateAll() {
     method: "POST",
     body: { force: $("forceRegen").checked },
   });
-  startPoll(data.job_id, "voice", async () => {
+  startPoll(data.job_id, "voice", async (job) => {
     await refresh();
+    toastBaked(job);
   });
 }
 
@@ -561,7 +609,7 @@ function renderBake() {
       const label = document.createElement("span");
       label.appendChild(styleChip(v.style));
       const text = document.createElement("span");
-      text.textContent = " #" + row.position + " " + (v.text || row.source);
+      text.textContent = "#" + row.position + " " + (v.text || row.source);
       label.appendChild(text);
       label.appendChild(statusChip(v.status));
       wrap.appendChild(label);
@@ -576,8 +624,12 @@ function renderBake() {
     $("downloadMp3").href = track.mp3_url;
     $("downloadWav").href = track.wav_url;
     $("outputPath").textContent = track.output_dir || state.project.path;
+    $("openFolderBtn").disabled = false;
+    $("showMp3Btn").disabled = false;
   } else {
     $("successCard").hidden = true;
+    $("openFolderBtn").disabled = true;
+    $("showMp3Btn").disabled = true;
   }
 }
 
@@ -704,6 +756,7 @@ async function doNew() {
   saveRecent(data.project.path);
   await refresh();
   await refreshVoices();
+  toast("Created project " + data.project.name + ".");
 }
 
 async function doOpen() {
@@ -724,12 +777,179 @@ async function doOpen() {
   await refreshVoices();
 }
 
+/* ---------- settings ---------- */
+
+async function loadSettings() {
+  const data = await api("/api/settings");
+  $("apiKeyStatus").textContent = data.has_key
+    ? "Active key: " + (data.key_hint || "set")
+    : "No API key found — save one below.";
+  $("exportDefaultHint").textContent = "Default: " + data.export_default;
+  if (document.activeElement !== $("exportRootInput")) {
+    $("exportRootInput").value = data.export_root || "";
+  }
+  await loadCosts();
+}
+
+async function loadCosts() {
+  let data;
+  try {
+    data = await api("/api/costs");
+  } catch (err) {
+    return;
+  }
+  const currentEl = $("costsCurrent");
+  const tableEl = $("costsTable");
+  const noteEl = $("costsNote");
+  tableEl.textContent = "";
+  noteEl.textContent =
+    "Estimates only — check AI Studio Billing for actual charges. " +
+    "Introductory TTS pricing ends Dec 31, 2026; rates double Jan 1, 2027.";
+  const history = Array.isArray(data.history) ? data.history : [];
+  if (history.length === 0) {
+    currentEl.hidden = true;
+    currentEl.textContent = "";
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "No API calls recorded yet.";
+    tableEl.appendChild(empty);
+    return;
+  }
+  const current = data.current || {};
+  currentEl.hidden = false;
+  currentEl.textContent =
+    monthLabel(data.current_month) + ": " + fmtEst(current.total_usd || 0) +
+    " est. (translate " + fmtEst(current.translate_usd || 0) +
+    " + voice " + fmtEst(current.tts_usd || 0) +
+    ", " + (current.calls || 0) + " calls)";
+  ["Month", "Translate", "Voice", "Total", "Calls"].forEach((h) => {
+    const cell = document.createElement("div");
+    cell.className = "row-head";
+    cell.textContent = h;
+    tableEl.appendChild(cell);
+  });
+  history.forEach((row) => {
+    const isCurrent = row.month === data.current_month;
+    [
+      monthLabel(row.month),
+      fmtEst(row.translate_usd),
+      fmtEst(row.tts_usd),
+      fmtEst(row.total_usd),
+      String(row.calls),
+    ].forEach((text) => {
+      const cell = document.createElement("div");
+      if (isCurrent) cell.className = "row-current";
+      cell.textContent = text;
+      tableEl.appendChild(cell);
+    });
+  });
+}
+
+async function saveKey() {
+  const value = $("apiKeyInput").value.trim();
+  if (!value) {
+    toast("Paste an API key first.");
+    return;
+  }
+  await api("/api/settings", { method: "PATCH", body: { gemini_api_key: value } });
+  $("apiKeyInput").value = "";
+  toast("API key saved.");
+  await loadSettings();
+}
+
+async function removeKey() {
+  await api("/api/settings", { method: "PATCH", body: { gemini_api_key: "" } });
+  $("apiKeyInput").value = "";
+  toast("API key removed — using baked key.");
+  await loadSettings();
+}
+
+async function saveExportRoot(value) {
+  await api("/api/settings", { method: "PATCH", body: { export_root: value } });
+  toast("Output folder updated.");
+  await loadSettings();
+}
+
+async function browseFolder() {
+  const bridge = window.pywebview && window.pywebview.api;
+  if (bridge && typeof bridge.pick_folder === "function") {
+    try {
+      const result = await bridge.pick_folder();
+      const path = Array.isArray(result) ? result[0] : result;
+      if (path) {
+        $("exportRootInput").value = path;
+        await saveExportRoot(path);
+      }
+      return;
+    } catch (err) {
+      /* dialog unavailable — fall through to typed path */
+    }
+  }
+  const typed = window.prompt(
+    "Output folder (absolute path):",
+    $("exportRootInput").value || ""
+  );
+  if (typed !== null && typed.trim()) {
+    $("exportRootInput").value = typed.trim();
+    await saveExportRoot(typed.trim());
+  }
+}
+
+async function resetExportRoot() {
+  await saveExportRoot(null);
+  $("exportRootInput").value = "";
+}
+
+function selectOutputPath() {
+  const el = $("outputPath");
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+async function revealTarget(target) {
+  let ok = false;
+  try {
+    const res = await fetch("/api/system/reveal", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target }),
+    });
+    ok = res.ok;
+  } catch (err) {
+    ok = false;
+  }
+  if (!ok) {
+    toast("Couldn't open the folder. Path copied above.");
+    selectOutputPath();
+  }
+}
+
 /* ---------- boot ---------- */
 
 function bind() {
   $("stepWords").addEventListener("click", () => goto("words"));
   $("stepVoice").addEventListener("click", () => goto("voice"));
   $("stepBake").addEventListener("click", () => goto("bake"));
+  $("settingsBtn").addEventListener("click", () => goto("settings"));
+
+  $("saveKeyBtn").addEventListener("click", saveKey);
+  $("removeKeyBtn").addEventListener("click", removeKey);
+  $("apiKeyInput").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") saveKey();
+  });
+  $("exportRootInput").addEventListener("change", () =>
+    saveExportRoot($("exportRootInput").value.trim() || null)
+  );
+  $("exportRootInput").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") saveExportRoot($("exportRootInput").value.trim() || null);
+  });
+  $("browseFolderBtn").addEventListener("click", browseFolder);
+  $("resetFolderBtn").addEventListener("click", resetExportRoot);
+  $("openFolderBtn").addEventListener("click", () => revealTarget("folder"));
+  $("showMp3Btn").addEventListener("click", () => revealTarget("mp3"));
 
   $("newProjectBtn").addEventListener("click", doNew);
   $("openBtn").addEventListener("click", doOpen);

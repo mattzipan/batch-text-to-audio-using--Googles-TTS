@@ -15,11 +15,13 @@
     <li><button class="btn btn-ghost btn-sm" id="stepVoice" data-goto="voice" type="button"><span class="stepper-num" id="numVoice">02</span><span class="stepper-label">Voice</span></button></li>
     <li><button class="btn btn-ghost btn-sm" id="stepBake" data-goto="bake" type="button"><span class="stepper-num" id="numBake">03</span><span class="stepper-label">Bake</span></button></li>
   </ol>
+  <button class="btn btn-ghost btn-sm" id="settingsBtn" type="button">⚙ Settings</button>
 </header>
 <div class="content">
 
   <section class="screen" data-screen="words" id="screenWords">
     <p class="hero" style="--i:0">Turn words into a drill tape.</p>
+    <div class="choice-grid">
     <div class="card" style="--i:1">
       <h2 class="section-title">Project</h2>
       <div class="field">
@@ -55,6 +57,7 @@
       </div>
       <button class="btn btn-primary" id="newProjectBtn" type="button">New project</button>
     </div>
+    <span class="choice-or" aria-hidden="true">or</span>
     <div class="card" style="--i:2">
       <h2 class="section-title">Open project</h2>
       <div class="field">
@@ -66,6 +69,7 @@
         <span class="hint">Recent projects</span>
         <div id="recentList"></div>
       </div>
+    </div>
     </div>
     <div class="card" style="--i:3">
       <h2 class="section-title">Import words</h2>
@@ -173,8 +177,47 @@
     <div class="card" style="--i:4" id="successCard" hidden>
       <h2 class="section-title">Your tape</h2>
       <audio id="finalAudio" controls></audio>
-      <p><a class="btn" id="downloadMp3" download>Download MP3</a> <a class="btn btn-ghost" id="downloadWav" download>Download WAV</a></p>
+      <p class="btn-row"><a class="btn" id="downloadMp3" download>Download MP3</a> <a class="btn btn-ghost" id="downloadWav" download>Download WAV</a></p>
+      <p class="btn-row">
+        <button class="btn btn-primary" id="openFolderBtn" type="button" disabled>Open output folder</button>
+        <button class="btn btn-ghost" id="showMp3Btn" type="button" disabled>Show MP3</button>
+      </p>
       <p>Output folder: <span class="mono" id="outputPath"></span></p>
+    </div>
+  </section>
+
+  <section class="screen" data-screen="settings" id="screenSettings" hidden>
+    <h2 class="section-title" style="--i:0">Settings</h2>
+    <div class="card" style="--i:1">
+      <h2 class="section-title">Gemini API key</h2>
+      <div class="field">
+        <label for="apiKeyInput">API key</label>
+        <input type="password" id="apiKeyInput" autocomplete="off" spellcheck="false" placeholder="paste a Gemini API key">
+        <span class="hint" id="apiKeyStatus"></span>
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="saveKeyBtn" type="button">Save key</button>
+        <button class="btn btn-ghost" id="removeKeyBtn" type="button">Remove key</button>
+      </div>
+      <p class="hint">Saved on this machine only. Takes effect immediately.</p>
+    </div>
+    <div class="card" style="--i:2">
+      <h2 class="section-title">Output folder</h2>
+      <div class="field">
+        <label for="exportRootInput">Output folder</label>
+        <input type="text" id="exportRootInput" spellcheck="false" placeholder="/home/you/Music/WordTape">
+        <span class="hint" id="exportDefaultHint"></span>
+      </div>
+      <div class="btn-row">
+        <button class="btn" id="browseFolderBtn" type="button">Browse…</button>
+        <button class="btn btn-ghost" id="resetFolderBtn" type="button">Reset to default</button>
+      </div>
+    </div>
+    <div class="card" style="--i:3">
+      <h2 class="section-title">Costs (estimates)</h2>
+      <p id="costsCurrent" hidden></p>
+      <div class="row-table costs-table" id="costsTable"></div>
+      <p class="hint" id="costsNote"></p>
     </div>
   </section>
 

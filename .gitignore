@@ -17,3 +17,7 @@ output/
 .webview/
 *.mp3
 *.wav
+# per-machine WordTape app settings (key/export root) — never commit
+settings.json
+# per-machine WordTape cost-estimate ledger — never commit
+costs.json

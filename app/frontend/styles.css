@@ -151,6 +151,25 @@ img, audio { max-width: 100%; }
   margin-bottom: 20px;
 }
 
+/* ---- Choice cards (F10): Project vs Open as parallel entries, not steps ---- */
+.choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+  position: relative;
+}
+.choice-or {
+  position: absolute;
+  left: 50%;
+  top: 32px;
+  transform: translateX(-50%);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-60);
+}
+
 /* ---- Buttons ---- */
 .btn {
   display: inline-flex;
@@ -198,13 +217,18 @@ img, audio { max-width: 100%; }
   letter-spacing: 0.04em;
   background: var(--paper-2);
   white-space: nowrap;
+  margin-right: 6px;
 }
+.chip:last-child { margin-right: 0; }
+.chip:not(:first-child) { margin-left: 6px; }
 .chip-main { background: var(--sun); }
 .chip-formal { background: var(--teal); color: var(--paper-2); border-color: var(--teal); }
 .chip-informal { background: var(--paper-2); border-style: dashed; }
 .chip-ok { background: var(--teal); color: var(--paper-2); border-color: var(--teal); }
 .chip-stale { background: var(--sun); }
 .chip-error { background: var(--tangerine); color: var(--paper-2); border-color: var(--tangerine); }
+.chip-pending { background: var(--paper-2); border-style: dashed; }
+.chip-generating { background: var(--sun); }
 
 /* ---- Switch (44x24 toggle) ---- */
 .switch {
@@ -222,6 +246,7 @@ img, audio { max-width: 100%; }
   border: 2px solid var(--ink);
   background: var(--paper-2);
   transition: background 0.15s ease;
+  pointer-events: none;
 }
 .switch .track::after {
   content: "";
@@ -332,6 +357,7 @@ img, audio { max-width: 100%; }
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .field > label { font-weight: 700; font-size: 14px; }
 .field input[type="text"],
+.field input[type="password"],
 .field input[type="number"],
 .field select,
 .field textarea {
@@ -343,6 +369,26 @@ img, audio { max-width: 100%; }
 }
 .field input[type="number"] { max-width: 140px; }
 .field .hint { font-size: 13px; color: var(--ink-60); }
+
+/* ---- WordTape frontend spacing rules (minimal, F4) — see AGENTS.md ---- */
+/* 1. Section titles inside cards start flush (no 28+24px stacked gap). */
+.card > .section-title:first-child { margin-top: 0; margin-bottom: 14px; }
+/* 2. CTA → progress → feedback text get a 12px gap (first child stays flush). */
+.card > .btn:not(:first-child),
+.card > .progress:not(:first-child),
+.card > p:not(:first-child) { margin-top: 12px; }
+/* 3. Bottom hints share one type style (extends .hint to the bare <p>s). */
+p#estimate,
+p[id$="ProgressText"] { font-size: 13px; color: var(--ink-60); margin-top: 12px; }
+/* 4. Chips space themselves — replaces literal " " gaps in JS (in .chip above). */
+/* 5. Button rows: one gap for grouped CTAs (row-actions keeps its dense 6px). */
+.btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+/* F4 step 2: headless cards (Voice model, Bake build) share one top rhythm —
+   no heading, first child sits flush at the card's 24px padding. */
+.card > :first-child { margin-top: 0; }
+
+/* ---- Settings screen (F7/F8): hint under the buttons shares the .hint type ---- */
+.card > p.hint { font-size: 13px; color: var(--ink-60); }
 
 /* ---- Motion ---- */
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -392,3 +438,25 @@ img, audio { max-width: 100%; }
   *, *::before, *::after { animation: none; transition: none; }
   .screen > * { animation: none; }
 }
+
+/* ---- Narrow / half-tiled windows: ≤900px (F5 tiling + F10 choice stack) ---- */
+@media (max-width: 900px) {
+  .content { padding: 20px 16px 64px; }
+  .choice-grid { grid-template-columns: 1fr; }
+  .choice-or { display: none; }
+  /* Rows keep the 5-column grid — scroll horizontally instead of reflowing.
+     minmax() preserves each column's minimum width so cells never crush. */
+  .row-table {
+    overflow-x: auto;
+    grid-template-columns: 48px minmax(150px, 1.2fr) minmax(220px, 2fr) 120px 200px;
+  }
+}
+
+/* ---- Costs card (F12): current-month line + month history table ---- */
+/* Reuses .row-table/.row-head cells; 12px keeps the 6/12/14 spacing scale. */
+.card > .costs-table { margin-top: 12px; }
+.costs-table {
+  grid-template-columns: minmax(140px, 1.4fr) minmax(96px, 1fr) minmax(96px, 1fr) minmax(96px, 1fr) minmax(56px, 0.7fr);
+}
+.costs-table > .row-current { background: var(--sun); }
+.costs-table > .empty-state { grid-column: 1 / -1; }

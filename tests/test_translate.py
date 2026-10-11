@@ -211,3 +211,87 @@ def test_progress_called_after_each_chunk() -> None:
         rows, "de", "id", True, client=mock_client, progress=lambda d, t: seen.append((d, t))
     )
     assert seen == [(25, 26), (26, 26)]
+
+
+def make_usage(prompt: int = 1000, candidates: int = 400):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(prompt_token_count=prompt, candidates_token_count=candidates)
+
+
+def make_response_with_usage(payload: str, usage) -> MagicMock:
+    resp = make_response(payload)
+    resp.usage_metadata = usage
+    return resp
+
+
+def test_collect_costs_appends_estimate_per_successful_call() -> None:
+    rows = make_rows(2)
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = make_response_with_usage(
+        json.dumps(make_entries(2, 0)), make_usage(1000, 400)
+    )
+    costs: list[float] = []
+    result = translate_rows(
+        rows, "de", "id", True, client=mock_client, collect_costs=costs
+    )
+    assert result["r00"]["translation"] == "trans0"
+    # F11 verify math: prompt×$0.30/1M + candidates×$2.50/1M
+    assert len(costs) == 1
+    assert costs[0] == pytest.approx(1000 / 1e6 * 0.30 + 400 / 1e6 * 2.50)
+
+
+def test_collect_costs_counts_parse_retry_as_second_estimate() -> None:
+    rows = make_rows(1)
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = [
+        make_response_with_usage("this is not json", make_usage(500, 100)),
+        make_response_with_usage(json.dumps(make_entries(1, 0)), make_usage(520, 110)),
+    ]
+    costs: list[float] = []
+    translate_rows(rows, "de", "id", True, client=mock_client, collect_costs=costs)
+    assert len(costs) == 2
+    assert costs[0] == pytest.approx(500 / 1e6 * 0.30 + 100 / 1e6 * 2.50)
+    assert costs[1] == pytest.approx(520 / 1e6 * 0.30 + 110 / 1e6 * 2.50)
+
+
+def test_collect_costs_skips_none_usage() -> None:
+    rows = make_rows(1)
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = make_response_with_usage(
+        json.dumps(make_entries(1, 0)), None
+    )
+    costs: list[float] = []
+    translate_rows(rows, "de", "id", True, client=mock_client, collect_costs=costs)
+    assert costs == []  # omitted, never $0.00 for unknown
+
+
+def test_collect_costs_transient_retry_inside_call_counts_once() -> None:
+    rows = make_rows(1)
+    transient = RuntimeError("429 RESOURCE_EXHAUSTED: quota hit")
+    transient.code = 429  # type: ignore[attr-defined]
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = [
+        transient,  # no response → no usage to cost
+        make_response_with_usage(json.dumps(make_entries(1, 0)), make_usage(300, 90)),
+    ]
+    costs: list[float] = []
+    with patch.object(translate_mod.time, "sleep"):
+        translate_rows(rows, "de", "id", True, client=mock_client, collect_costs=costs)
+    # one _call_with_retries return → one estimate (raw response kept)
+    assert len(costs) == 1
+    assert costs[0] == pytest.approx(300 / 1e6 * 0.30 + 90 / 1e6 * 2.50)
+
+
+def test_collect_costs_batches_accumulate() -> None:
+    rows = make_rows(26)
+    usage = make_usage(1000, 400)
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = [
+        make_response_with_usage(json.dumps(make_entries(25, 0)), usage),
+        make_response_with_usage(json.dumps(make_entries(1, 25)), usage),
+    ]
+    costs: list[float] = []
+    translate_rows(rows, "de", "id", True, client=mock_client, collect_costs=costs)
+    assert len(costs) == 2
+    assert costs == pytest.approx([costs[0], costs[0]])

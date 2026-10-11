@@ -19,11 +19,18 @@ def resource_path(rel: str) -> Path:
 
 
 def get_api_key() -> str:
-    """Return the Gemini API key from env GEMINI_API_KEY or app/secrets.py.
+    """Return the Gemini API key: user setting → env → app/secrets.py.
+
+    ``GOOGLE_API_KEY`` is deliberately ignored (documented in README).
 
     Raises:
-        RuntimeError: If neither source provides a non-empty key.
+        RuntimeError: If none of the sources provides a non-empty key.
     """
+    from app import settings_store
+
+    user_key: str | None = settings_store.load().get("gemini_api_key")
+    if user_key:
+        return user_key
     env_key: str | None = os.environ.get("GEMINI_API_KEY")
     if env_key:
         return env_key
@@ -36,8 +43,9 @@ def get_api_key() -> str:
         if file_key:
             return file_key
     raise RuntimeError(
-        "Gemini API key not found. Set the GEMINI_API_KEY environment variable "
-        "or copy app/secrets.example.py to app/secrets.py and set API_KEY there."
+        "Gemini API key not found. Save one in Settings (⚙), set the "
+        "GEMINI_API_KEY environment variable, or copy app/secrets.example.py "
+        "to app/secrets.py and set API_KEY there."
     )
 
 
@@ -75,22 +83,60 @@ def music_dir() -> Path | None:
     return cand if cand.is_dir() else None
 
 
-def export_dir(project_name: str) -> Path:
-    """Final track destination: ~/Music/WordTape/<project>/, else <app>/output/<project>/.
+def default_export_root() -> Path:
+    """Default export root (no settings/env override): Music/WordTape else output/."""
+    music = music_dir()
+    return (music / APP_NAME) if music else (app_root() / "output")
 
-    WORDTAPE_EXPORT_DIR overrides both (used by tests and as an escape hatch).
+
+def export_root() -> Path:
+    """Export root: settings.export_root → env WORDTAPE_EXPORT_DIR → default.
+
+    The settings root is machine-specific (spec F8); nothing is created here.
     """
+    from app import settings_store
+
+    saved: str | None = settings_store.load().get("export_root")
+    if saved:
+        return Path(saved)
     env = os.environ.get("WORDTAPE_EXPORT_DIR")
     if env:
-        root = Path(env)
-    else:
-        music = music_dir()
-        root = (music / APP_NAME) if music else (app_root() / "output")
-    return root / project_name
+        return Path(env)
+    return default_export_root()
+
+
+def export_dir(project_name: str) -> Path:
+    """Final track destination: <export_root>/<project>/ (see export_root)."""
+    return export_root() / project_name
+
+
+_env_before_apply: str | None = None
+_env_before_apply_set = False
 
 
 def apply_api_key_to_env() -> str:
     """Resolve the API key via get_api_key() and export it as GEMINI_API_KEY."""
+    global _env_before_apply, _env_before_apply_set
+    if not _env_before_apply_set:
+        _env_before_apply = os.environ.get("GEMINI_API_KEY")
+        _env_before_apply_set = True
     key: str = get_api_key()
     os.environ["GEMINI_API_KEY"] = key
     return key
+
+
+def restore_env_key(cleared_key: str | None) -> None:
+    """Undo an apply that exported a now-cleared saved key.
+
+    If ``GEMINI_API_KEY`` currently holds the cleared setting value, restore
+    the env value this process first saw before applying a resolved key
+    (shell env, or unset), so :func:`get_api_key` falls back env → baked.
+    """
+    if not cleared_key:
+        return
+    if os.environ.get("GEMINI_API_KEY") != cleared_key:
+        return
+    if _env_before_apply_set and _env_before_apply is not None:
+        os.environ["GEMINI_API_KEY"] = _env_before_apply
+    else:
+        os.environ.pop("GEMINI_API_KEY", None)

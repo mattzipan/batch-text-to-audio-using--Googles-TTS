@@ -113,7 +113,7 @@ def main(argv=None) -> None:
             url,
             width=1280,
             height=800,
-            min_size=(1024, 700),
+            min_size=(640, 400),
             resizable=True,
             js_api=Api(),
         )

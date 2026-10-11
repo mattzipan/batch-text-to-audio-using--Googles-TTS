@@ -27,8 +27,9 @@ def _mock_client(audio: bytes = b"RIFF-test"):
 def test_request_construction_default_voice():
     client = _mock_client()
     backend = GeminiBackend(client=client)
-    result = backend._synthesize_one(SynthesisRequest(text="Halo!"))
-    assert result == b"RIFF-test"
+    audio, usage = backend._synthesize_one(SynthesisRequest(text="Halo!"))
+    assert audio == b"RIFF-test"
+    assert usage is None  # mock response carries no usage_metadata
     _, kwargs = client.models.generate_content.call_args
     assert kwargs["model"] == DEFAULT_MODEL
     assert kwargs["config"].response_modalities == ["AUDIO"]
@@ -68,7 +69,8 @@ def test_text_parts_without_audio_are_skipped():
         parts=[text_part, audio_part], prompt_feedback=None
     )
     backend = GeminiBackend(client=client)
-    assert backend._synthesize_one(SynthesisRequest(text="Hi")) == b"RIFF-test"
+    audio, _usage = backend._synthesize_one(SynthesisRequest(text="Hi"))
+    assert audio == b"RIFF-test"
 
 
 def test_empty_response_is_per_item_error():
@@ -169,6 +171,59 @@ def test_list_voices_never_iterates_the_response_object():
     client.voices.list.return_value = SimpleNamespace(voices=None)
     backend = GeminiBackend(client=client)
     assert backend.list_voices() == []
+
+
+def _usage_ns(prompt=29, candidates=92, audio_detail=True):
+    cand_details = (
+        [SimpleNamespace(modality=SimpleNamespace(name="AUDIO"), token_count=candidates)]
+        if audio_detail
+        else None
+    )
+    return SimpleNamespace(
+        prompt_token_count=prompt,
+        candidates_token_count=candidates,
+        prompt_tokens_details=None,
+        candidates_tokens_details=cand_details,
+    )
+
+
+def test_synthesize_many_attaches_usage_and_cost_fields():
+    usage = _usage_ns()
+    part = SimpleNamespace(inline_data=SimpleNamespace(data=b"RIFF-test"))
+    client = MagicMock()
+    client.models.generate_content.return_value = SimpleNamespace(
+        parts=[part], prompt_feedback=None, usage_metadata=usage
+    )
+    backend = GeminiBackend(client=client)
+    results = list(backend.synthesize_many([(1, SynthesisRequest(text="Hi"))]))
+    (result,) = results
+    assert result.ok is True
+    assert result.prompt_tokens == 29
+    assert result.candidates_tokens == 92
+    # F11 verify math: 29/1M×$0.50 + 92/1M×$6.00 (intro lite-TTS rates).
+    assert result.estimated_cost_usd == pytest.approx(29 / 1e6 * 0.50 + 92 / 1e6 * 6.00)
+
+
+def test_failed_items_have_no_cost_fields():
+    client = MagicMock()
+    client.models.generate_content.side_effect = Exception("boom")
+    backend = GeminiBackend(client=client)
+    results = list(backend.synthesize_many([(1, SynthesisRequest(text="a"))]))
+    (result,) = results
+    assert result.ok is False
+    assert result.prompt_tokens is None
+    assert result.candidates_tokens is None
+    assert result.estimated_cost_usd is None
+
+
+def test_missing_usage_metadata_yields_none_cost():
+    client = _mock_client()  # SimpleNamespace parts only, no usage_metadata
+    backend = GeminiBackend(client=client)
+    results = list(backend.synthesize_many([(1, SynthesisRequest(text="Hi"))]))
+    (result,) = results
+    assert result.ok is True
+    assert result.prompt_tokens is None
+    assert result.estimated_cost_usd is None
 
 
 if __name__ == "__main__":

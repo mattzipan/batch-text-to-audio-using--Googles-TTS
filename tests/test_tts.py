@@ -144,3 +144,93 @@ def test_test_voice_raises_on_error() -> None:
     backend = FakeBackend(audio=AUDIO, fail_indexes=(1,))
     with pytest.raises(RuntimeError, match="fake failure"):
         tts.test_voice("Kore", "gemini-3.8-flash-lite-tts", "halo", backend=backend)
+
+
+class CostlyBackend(FakeBackend):
+    """FakeBackend that reports a fixed per-item cost estimate on success."""
+
+    def __init__(self, cost_per_item: float = 0.001, **kwargs):
+        super().__init__(**kwargs)
+        self.cost_per_item = cost_per_item
+
+    def synthesize_many(self, items, *, progress=None, cancel=None):
+        for result in super().synthesize_many(items, progress=progress, cancel=cancel):
+            if result.ok:
+                result.estimated_cost_usd = self.cost_per_item
+                result.prompt_tokens = 10
+                result.candidates_tokens = 20
+            yield result
+
+
+def test_generate_audio_collect_cost_sums_estimates(tmp_path: Path) -> None:
+    project = _make_project(tmp_path / "p", ("pending", "pending", "ok"))
+    backend = CostlyBackend(cost_per_item=0.001)
+    collect: dict = {}
+    generate_audio(project, backend=backend, collect_cost=collect)
+    assert collect["usd"] == pytest.approx(0.002)
+    assert collect["known"] is True
+
+
+def test_generate_audio_collect_cost_unknown_without_usage(tmp_path: Path) -> None:
+    project = _make_project(tmp_path / "p", ("pending", "stale", "ok"))
+    backend = FakeBackend(audio=AUDIO)  # yields results with cost None
+    collect: dict = {}
+    generate_audio(project, backend=backend, collect_cost=collect)
+    assert collect["usd"] == 0.0
+    assert collect["known"] is False  # caller omits the toast suffix
+
+
+def test_generate_audio_collect_cost_skips_failed_items(tmp_path: Path) -> None:
+    project = _make_project(tmp_path / "p", ("pending", "pending", "ok"))
+    backend = CostlyBackend(cost_per_item=0.001, fail_indexes=(1,))
+    collect: dict = {}
+    generate_audio(project, backend=backend, collect_cost=collect)
+    assert collect["usd"] == pytest.approx(0.001)  # only the ok item counts
+    assert collect["known"] is True
+
+
+def test_generate_audio_collect_cost_empty_targets(tmp_path: Path) -> None:
+    project = _make_project(tmp_path / "p", ("ok", "ok", "ok"))
+    backend = FakeBackend(audio=AUDIO, run_error=RuntimeError("must not be called"))
+    collect: dict = {}
+    assert generate_audio(project, backend=backend, collect_cost=collect) == {}
+    assert collect == {"usd": 0.0, "known": False}
+
+
+def test_generate_audio_collect_cost_untouched_on_run_error(tmp_path: Path) -> None:
+    project = _make_project(tmp_path / "p", ("pending", "pending", "pending"))
+    backend = FakeBackend(audio=AUDIO, run_error=RuntimeError("no creds"))
+    collect: dict = {}
+    with pytest.raises(RuntimeError, match="no creds"):
+        generate_audio(project, backend=backend, collect_cost=collect)
+    assert collect == {}  # left untouched on whole-run failure
+
+
+def test_test_voice_collect_cost_filled_on_success() -> None:
+    backend = CostlyBackend(audio=AUDIO, cost_per_item=0.0004)
+    collect: dict = {}
+    audio = tts.test_voice(
+        "Kore", "gemini-3.8-flash-lite-tts", "halo", backend=backend, collect_cost=collect
+    )
+    assert audio == AUDIO
+    assert collect["usd"] == pytest.approx(0.0004)
+    assert collect["known"] is True
+
+
+def test_test_voice_collect_cost_unknown_when_no_usage() -> None:
+    backend = FakeBackend(audio=AUDIO)
+    collect: dict = {}
+    tts.test_voice(
+        "Kore", "gemini-3.8-flash-lite-tts", "halo", backend=backend, collect_cost=collect
+    )
+    assert collect == {"usd": 0.0, "known": False}
+
+
+def test_test_voice_collect_cost_untouched_on_error() -> None:
+    backend = FakeBackend(audio=AUDIO, fail_indexes=(1,))
+    collect: dict = {}
+    with pytest.raises(RuntimeError, match="fake failure"):
+        tts.test_voice(
+            "Kore", "gemini-3.8-flash-lite-tts", "halo", backend=backend, collect_cost=collect
+        )
+    assert collect == {}

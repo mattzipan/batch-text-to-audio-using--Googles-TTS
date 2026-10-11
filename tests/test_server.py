@@ -8,6 +8,7 @@ isolated per test.
 
 from __future__ import annotations
 
+import os
 import threading
 from pathlib import Path
 import time
@@ -28,6 +29,8 @@ from backends.base import VoiceInfo
 def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("WORDTAPE_DATA_DIR", str(tmp_path / "projects"))
     monkeypatch.setenv("WORDTAPE_EXPORT_DIR", str(tmp_path / "export"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("GEMINI_API_KEY", "env-key-test-0123456789")
     server_mod.current = None
     with jobs_mod._lock:
         jobs_mod._jobs.clear()
@@ -434,7 +437,9 @@ def test_voices_passthrough(client, monkeypatch):
 
 def test_voice_test_returns_wav(client, monkeypatch):
     monkeypatch.setattr(
-        server_mod.tts, "test_voice", lambda voice, model, text: b"RIFF-fake"
+        server_mod.tts,
+        "test_voice",
+        lambda voice, model, text, **kwargs: b"RIFF-fake",
     )
     resp = client.post(
         "/api/voice/test",
@@ -611,3 +616,210 @@ def test_track_build_with_included(client, monkeypatch):
 
     bad = client.post("/api/track/build", json={"included": ["no-colon"]})
     assert bad.status_code == 400
+
+
+# --- app settings (F7: API key, F8: output folder) ------------------------
+
+
+def test_settings_get_shape_never_returns_full_key(client):
+    resp = client.get("/api/settings")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == {"has_key", "key_hint", "export_root", "export_default"}
+    assert body["has_key"] is True
+    assert body["key_hint"] == "…6789"  # env key from _isolated, last 4 only
+    assert body["export_root"] is None
+    assert isinstance(body["export_default"], str)
+    # The env key itself must never appear in the response.
+    assert os.environ["GEMINI_API_KEY"] not in resp.text
+
+
+def test_settings_patch_key_masks_and_reapplies(client, monkeypatch):
+    full = "dummy-key-12345678"
+
+    saved = client.patch("/api/settings", json={"gemini_api_key": full})
+    assert saved.status_code == 200, saved.text
+    assert full not in saved.text
+    assert saved.json()["has_key"] is True
+    assert saved.json()["key_hint"] == "…5678"
+    assert saved.json()["export_root"] is None
+    # Re-resolved into the env so Translate/TTS pick it up without restart.
+    assert os.environ["GEMINI_API_KEY"] == full
+
+    for path in ("/api/settings", "/api/state", "/api/jobs/no-such-job"):
+        body = client.get(path)
+        assert full not in body.text, path
+
+    # Validation: too short / whitespace-only / wrong type / unknown field.
+    for bad in (
+        {"gemini_api_key": "short"},
+        {"gemini_api_key": "        "},
+        {"gemini_api_key": 12345678},
+        {"bogus": "x"},
+    ):
+        assert client.patch("/api/settings", json=bad).status_code == 400
+    assert full not in client.get("/api/settings").text
+
+    # Clear (empty string) falls back to env/baked — never the removed key.
+    cleared = client.patch("/api/settings", json={"gemini_api_key": ""})
+    assert cleared.status_code == 200, cleared.text
+    assert os.environ["GEMINI_API_KEY"] != full
+    after = client.get("/api/settings").json()
+    assert after["key_hint"] != "…5678"
+    assert full not in client.get("/api/settings").text
+
+    # null is also a valid clear.
+    assert client.patch("/api/settings", json={"gemini_api_key": None}).status_code == 200
+
+
+def test_settings_patch_export_root_validation(client, tmp_path, monkeypatch):
+    from app import config
+
+    # Relative path rejected.
+    assert (
+        client.patch("/api/settings", json={"export_root": "relative/path"}).status_code
+        == 400
+    )
+    # Unwritable (a file in the way) rejected.
+    blocker = tmp_path / "blocker.txt"
+    blocker.write_text("x", encoding="utf-8")
+    resp = client.patch(
+        "/api/settings", json={"export_root": str(blocker / "sub")}
+    )
+    assert resp.status_code == 400
+
+    # Valid absolute path is created at save and wins the export_dir chain.
+    good = tmp_path / "newroot"
+    resp = client.patch("/api/settings", json={"export_root": str(good)})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["export_root"] == str(good)
+    assert good.is_dir()
+    assert config.export_dir("demo") == good / "demo"
+
+    # Empty string resets; env WORDTAPE_EXPORT_DIR (fixture) takes over again.
+    resp = client.patch("/api/settings", json={"export_root": ""})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["export_root"] is None
+    assert resp.json()["export_default"] == str(config.default_export_root())
+    assert config.export_dir("demo") == Path(os.environ["WORDTAPE_EXPORT_DIR"]) / "demo"
+
+    # Wrong type rejected.
+    assert client.patch("/api/settings", json={"export_root": 42}).status_code == 400
+
+
+# --- system reveal (F6) ----------------------------------------------------
+
+
+def _export_dir() -> Path:
+    return Path(os.environ["WORDTAPE_EXPORT_DIR"]) / "demo"
+
+
+def test_reveal_requires_project(client):
+    resp = client.post("/api/system/reveal", json={"target": "folder"})
+    assert resp.status_code == 409
+
+
+def test_reveal_traversal_and_missing_404(client):
+    _new_project(client)
+    assert (
+        client.post(
+            "/api/system/reveal", json={"target": "../../etc/passwd"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            "/api/system/reveal", json={"target": "/etc/passwd"}
+        ).status_code
+        == 404
+    )
+    # No built track yet -> folder and mp3 are both missing.
+    assert (
+        client.post("/api/system/reveal", json={"target": "mp3"}).status_code
+        == 404
+    )
+    assert (
+        client.post("/api/system/reveal", json={"target": "wav"}).status_code
+        == 404
+    )
+    assert (
+        client.post("/api/system/reveal", json={"target": "folder"}).status_code
+        == 404
+    )
+    assert (
+        client.post("/api/system/reveal", json={"target": 42}).status_code
+        == 404
+    )
+
+
+def test_reveal_success_shape_with_mocked_popen(client, monkeypatch):
+    _new_project(client)
+    out = _export_dir()
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "final.mp3").write_bytes(b"mp3-bytes")
+
+    launched: list[list[str]] = []
+
+    class _Proc:
+        pid = 4242
+
+    def _fake_popen(argv, **kwargs):
+        launched.append(list(argv))
+        assert kwargs.get("check") is None
+        assert "capture_output" not in kwargs
+        return _Proc()
+
+    monkeypatch.setattr(server_mod.subprocess, "Popen", _fake_popen)
+
+    resp = client.post("/api/system/reveal", json={"target": "mp3"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"opened": True, "selected": True}
+    assert launched[0][:2] == ["nautilus", "--select"]
+    assert launched[0][2] == str(out / "final.mp3")
+
+    resp = client.post("/api/system/reveal", json={"target": "folder"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"opened": True, "selected": True}
+
+    # nemo fallback when nautilus cannot launch.
+    launched.clear()
+
+    def _nemo_only(argv, **kwargs):
+        if argv[0] == "nautilus":
+            raise FileNotFoundError("nautilus")
+        launched.append(list(argv))
+        return _Proc()
+
+    monkeypatch.setattr(server_mod.subprocess, "Popen", _nemo_only)
+    resp = client.post("/api/system/reveal", json={"target": "mp3"})
+    assert resp.json() == {"opened": True, "selected": True}
+    assert launched[0][0] == "nemo"
+
+    # xdg-open fallback reports selected=False.
+    def _xdg_only(argv, **kwargs):
+        if argv[0] == "xdg-open":
+            launched.append(list(argv))
+            return _Proc()
+        raise OSError(argv[0])
+
+    monkeypatch.setattr(server_mod.subprocess, "Popen", _xdg_only)
+    resp = client.post("/api/system/reveal", json={"target": "folder"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"opened": True, "selected": False}
+    assert launched[-1][0] == "xdg-open"
+
+
+def test_reveal_501_when_nothing_launches(client, monkeypatch):
+    _new_project(client)
+    out = _export_dir()
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "final.mp3").write_bytes(b"mp3-bytes")
+
+    def _dead(argv, **kwargs):
+        raise FileNotFoundError(argv[0])
+
+    monkeypatch.setattr(server_mod.subprocess, "Popen", _dead)
+    resp = client.post("/api/system/reveal", json={"target": "mp3"})
+    assert resp.status_code == 501
+    assert "detail" in resp.json()

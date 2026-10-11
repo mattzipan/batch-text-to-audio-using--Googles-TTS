@@ -40,6 +40,20 @@ def _is_transient(exc: Exception) -> bool:
     return "resource_exhausted" in text or "unavailable" in text or "too many requests" in text
 
 
+def _estimate_cost(usage, model: str) -> float | None:
+    """Local cost estimate from usage_metadata; never raises into synthesis.
+
+    Lazy import keeps ``backends/`` usable without the ``app`` package
+    (and any costing failure degrades to "no estimate").
+    """
+    try:
+        from app import costs
+
+        return costs.estimate_tts(usage, model)
+    except Exception:  # noqa: BLE001 - costing must never break synthesis
+        return None
+
+
 class GeminiBackend(TTSBackend):
     name = "gemini"
 
@@ -50,7 +64,12 @@ class GeminiBackend(TTSBackend):
         # genai.Client() reads GEMINI_API_KEY (or GOOGLE_API_KEY) from the env.
         self.client = client or genai.Client()
 
-    def _synthesize_one(self, req: SynthesisRequest) -> bytes:
+    def _synthesize_one(self, req: SynthesisRequest) -> tuple[bytes, object | None]:
+        """Return ``(wav_bytes, usage_metadata)``.
+
+        usage_metadata is ``None`` when the response omitted it; failure
+        paths raise, so callers see usage only alongside real audio bytes.
+        """
         # The text is a verbatim transcript: no style/prompt is ever injected.
         part: dict = {"text": req.text}
         if req.style:
@@ -71,6 +90,7 @@ class GeminiBackend(TTSBackend):
         response = self.client.models.generate_content(
             model=self.model, contents=contents, config=config
         )
+        usage = getattr(response, "usage_metadata", None)
         # Never call response.text here — it raises on audio-only responses.
         for p in response.parts or []:
             data = getattr(p.inline_data, "data", None) if p.inline_data else None
@@ -78,12 +98,23 @@ class GeminiBackend(TTSBackend):
                 continue
             if isinstance(data, str):  # some SDK versions return base64 text
                 data = base64.b64decode(data)
-            return data  # complete WAV bytes — return as-is, no header wrapping
+            # complete WAV bytes — return as-is, no header wrapping
+            return data, usage
         raise RuntimeError(
             f"no audio in response (prompt_feedback={response.prompt_feedback})"
         )
 
     def synthesize_many(self, items, *, progress=None, cancel=None):
+        """Yield one SynthesisResult per item, in input order.
+
+        Cost fields (``prompt_tokens``/``candidates_tokens``/
+        ``estimated_cost_usd``) are attached on success from the response's
+        usage_metadata; failed items carry ``None``. Cost counts the
+        successful attempt only — pre-success retry attempts are not added.
+        The estimate is local (usage × pricing table), never billed cost,
+        and a costing failure degrades to ``estimated_cost_usd=None``
+        without affecting synthesis.
+        """
         total = len(items)
         done = 0
         for index, req in items:
@@ -91,9 +122,10 @@ class GeminiBackend(TTSBackend):
                 return
             last_error: Exception | None = None
             audio: bytes | None = None
+            usage = None
             for attempt in range(1, _MAX_RETRIES + 1):
                 try:
-                    audio = self._synthesize_one(req)
+                    audio, usage = self._synthesize_one(req)
                     last_error = None
                     break
                 except Exception as exc:  # noqa: BLE001 - mapped to per-item result
@@ -110,7 +142,14 @@ class GeminiBackend(TTSBackend):
                 yield SynthesisResult(index=index, ok=False, error=str(last_error))
             else:
                 assert audio is not None
-                yield SynthesisResult(index=index, ok=True, audio=audio)
+                yield SynthesisResult(
+                    index=index,
+                    ok=True,
+                    audio=audio,
+                    prompt_tokens=getattr(usage, "prompt_token_count", None),
+                    candidates_tokens=getattr(usage, "candidates_token_count", None),
+                    estimated_cost_usd=_estimate_cost(usage, self.model),
+                )
             if progress is not None:
                 progress(done, total, req.text[:30])
 

@@ -17,6 +17,7 @@ from google import genai
 from google.genai import types
 
 from app import config
+from app import costs
 from app.project import Row
 
 _BATCH_SIZE = 25
@@ -146,6 +147,14 @@ def _coerce_str_or_none(value: Any) -> str | None:
     return str(value)
 
 
+def _estimate_response_cost(response: Any) -> float | None:
+    """Local cost estimate for one generate_content response; never raises."""
+    try:
+        return costs.estimate_translate(getattr(response, "usage_metadata", None))
+    except Exception:  # noqa: BLE001 - costing must never break translation
+        return None
+
+
 def translate_rows(
     rows: list[Row],
     source_lang: str,
@@ -154,6 +163,7 @@ def translate_rows(
     client: Any | None = None,
     progress: Callable[[int, int], None] | None = None,
     cancel: Callable[[], bool] | None = None,
+    collect_costs: list | None = None,
 ) -> dict[str, dict[str, str | None]]:
     """Translate ``rows`` in batches of 25 via the Gemini text model.
 
@@ -161,6 +171,13 @@ def translate_rows(
     ``translation`` coerces missing/null to ``""``; ``formal``/``informal`` stay
     ``None`` when absent (and are always ``None`` when ``with_variants`` is
     False).
+
+    When ``collect_costs`` is given, it receives one local cost estimate
+    (USD, from usage_metadata × the pricing table) after each actual
+    ``_call_with_retries`` invocation — the first try *and* any
+    ``_RETRY_SUFFIX`` parse retry — appended only when the estimate is not
+    ``None``. Estimates are approximate; billed cost lives in AI Studio
+    Billing.
     """
     if not rows:
         return {}
@@ -186,6 +203,10 @@ def translate_rows(
             raise RuntimeError(
                 f"translation batch {batch_idx}/{num_batches} failed: {exc}"
             ) from exc
+        if collect_costs is not None:
+            estimate = _estimate_response_cost(response)
+            if estimate is not None:
+                collect_costs.append(estimate)
 
         try:
             entries = _extract_entries(response, len(chunk))
@@ -199,6 +220,10 @@ def translate_rows(
                 raise RuntimeError(
                     f"translation batch {batch_idx}/{num_batches} failed: {exc}"
                 ) from exc
+            if collect_costs is not None:
+                retry_estimate = _estimate_response_cost(retry_response)
+                if retry_estimate is not None:
+                    collect_costs.append(retry_estimate)
             try:
                 entries = _extract_entries(retry_response, len(chunk))
             except ValueError as exc:

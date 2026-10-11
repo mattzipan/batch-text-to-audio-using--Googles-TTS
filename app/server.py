@@ -11,8 +11,10 @@ Service modules (:mod:`app.translate`, :mod:`app.tts`, :mod:`app.assembler`,
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
 import secrets
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any
@@ -21,7 +23,17 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from app import assembler, config, importer, jobs, translate, tts
+from app import (
+    assembler,
+    config,
+    cost_ledger,
+    costs,
+    importer,
+    jobs,
+    settings_store,
+    translate,
+    tts,
+)
 from app import project as projects
 from app.project import Project, Row, Variant
 
@@ -124,6 +136,48 @@ def _track_info(proj: Project) -> dict[str, Any]:
     }
 
 
+def _settings_payload() -> dict[str, Any]:
+    """GET/PATCH /api/settings response shape (never includes the full key)."""
+    key: str | None
+    try:
+        key = config.get_api_key()
+    except RuntimeError:
+        key = None
+    return {
+        "has_key": key is not None,
+        "key_hint": ("…" + key[-4:]) if key is not None and len(key) > 4 else None,
+        "export_root": settings_store.load().get("export_root"),
+        "export_default": str(config.default_export_root()),
+    }
+
+
+def _launch_reveal(path: Path) -> tuple[bool, bool]:
+    """Fire-and-forget a file-manager reveal; return (opened, selected).
+
+    Tries ``nautilus --select``, then ``nemo --select``, then
+    ``xdg-open <folder>`` (selected=False on the xdg-open fallback).
+    Never blocks: plain ``Popen`` without ``check``/``capture_output``.
+    """
+    folder = path if path.is_dir() else path.parent
+    attempts: list[tuple[list[str], bool]] = [
+        (["nautilus", "--select", str(path)], True),
+        (["nemo", "--select", str(path)], True),
+        (["xdg-open", str(folder)], False),
+    ]
+    for argv, selects in attempts:
+        try:
+            subprocess.Popen(
+                argv,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            continue
+        return True, selects
+    return False, False
+
+
 def state_payload() -> dict[str, Any]:
     """Return the full UI state for the active project (or an empty one)."""
     proj = current
@@ -198,6 +252,7 @@ def _translate_run(wanted: list[str] | None, job: jobs.Job) -> None:
         job.total = total
         job.message = f"translating {done}/{total}"
 
+    collect_costs: list[float] = []
     mapping = translate.translate_rows(
         targets,
         proj.source_lang,
@@ -205,7 +260,10 @@ def _translate_run(wanted: list[str] | None, job: jobs.Job) -> None:
         proj.variants_enabled,
         progress=_progress,
         cancel=lambda: job.cancelled,
+        collect_costs=collect_costs,
     )
+    total = round(sum(collect_costs), 6)
+    known = bool(collect_costs)
     with _state_lock:
         taken: set[str] = set()
         for row in proj.rows:
@@ -228,6 +286,15 @@ def _translate_run(wanted: list[str] | None, job: jobs.Job) -> None:
         projects.save_project(proj)
     job.done = len(targets)
     job.message = f"translated {len(targets)} rows"
+    if known:
+        job.cost_est = total
+        job.message = (
+            f"translated {len(targets)} rows ({costs.fmt_est(total)} est.)"
+        )
+    # One ledger write per completed run; unknown estimates still count as a
+    # call (with 0). Runs that made no API call (nothing to translate) and
+    # errored/cancelled-by-exception runs never reach this line.
+    _record_cost("translate", total if known else 0.0)
 
 
 def _tts_run(
@@ -237,20 +304,37 @@ def _tts_run(
     if proj is None:
         raise RuntimeError("no project open")
 
+    attempted = False
+
     def _progress(done: int, total: int, message: str = "") -> None:
+        nonlocal attempted
+        attempted = True
         job.done = done
         job.total = total
         job.message = message
 
+    collect_cost: dict[str, Any] = {}
     tts.generate_audio(
         proj,
         variant_ids=variant_ids,
         force=force,
         progress=_progress,
         cancel=lambda: job.cancelled,
+        collect_cost=collect_cost,
     )
     with _state_lock:
         projects.save_project(proj)
+    known = bool(collect_cost.get("known"))
+    total = round(float(collect_cost.get("usd") or 0.0), 6)
+    if known:
+        job.cost_est = total
+        est = f"({costs.fmt_est(total)} est.)"
+        job.message = f"{job.message} {est}".strip() if job.message else est
+    # Record only when at least one synthesis attempt happened (progress fired
+    # or an estimate came back) — a no-op run spends nothing, so it is not a
+    # billable completion. Unknown estimates still count as a call at $0.
+    if attempted or known:
+        _record_cost("tts", total if known else 0.0)
 
 
 def _track_run(job: jobs.Job, wanted: list[tuple[str, str]] | None = None) -> None:
@@ -288,6 +372,18 @@ def _start_job_or_409(kind: str, fn: Any) -> str:
         return jobs.start_job(kind, fn)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _record_cost(kind: str, usd: float) -> None:
+    """One best-effort ledger write per billable completion (spec F12).
+
+    Wrapped so a ledger failure can never fail the job itself;
+    :func:`app.cost_ledger.record` also never raises.
+    """
+    try:
+        cost_ledger.record(kind, usd)
+    except Exception:  # noqa: BLE001 - the ledger is best-effort by design
+        pass
 
 
 def create_app() -> FastAPI:
@@ -559,8 +655,17 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="voice is required")
         if not isinstance(text, str) or not text:
             raise HTTPException(status_code=400, detail="text is required")
-        data = tts.test_voice(voice, model, text)
-        return Response(content=bytes(data), media_type="audio/wav")
+        collect_cost: dict[str, Any] = {}
+        data = tts.test_voice(voice, model, text, collect_cost=collect_cost)
+        known = bool(collect_cost.get("known"))
+        total = round(float(collect_cost.get("usd") or 0.0), 6)
+        _record_cost("tts", total if known else 0.0)
+        # Bytes contract unchanged: still the WAV; the estimate rides in a
+        # header only when usage was reported (frontend toasts "est." then).
+        headers = {"X-Est-Cost-USD": str(total)} if known else None
+        return Response(
+            content=bytes(data), media_type="audio/wav", headers=headers
+        )
 
     @app.post("/api/tts/generate")
     async def api_tts_generate(request: Request) -> dict[str, Any]:
@@ -697,6 +802,127 @@ def create_app() -> FastAPI:
                 proj.tts_model = model
             projects.save_project(proj)
             return _project_meta(proj)
+
+    @app.get("/api/settings")
+    def api_settings() -> dict[str, Any]:
+        return _settings_payload()
+
+    @app.patch("/api/settings")
+    async def api_settings_patch(request: Request) -> dict[str, Any]:
+        body = await _body(request)
+        allowed = {"gemini_api_key", "export_root"}
+        unknown = sorted(key for key in body if key not in allowed)
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unknown settings: {unknown}",
+            )
+        patch: dict[str, Any] = {}
+        if "gemini_api_key" in body:
+            raw = body["gemini_api_key"]
+            if raw is None:
+                patch["gemini_api_key"] = None
+            elif not isinstance(raw, str):
+                raise HTTPException(
+                    status_code=400, detail="gemini_api_key must be a string"
+                )
+            else:
+                value = raw.strip()
+                if raw == "":
+                    patch["gemini_api_key"] = None
+                elif not value:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="gemini_api_key must not be whitespace",
+                    )
+                elif len(value) < 8:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="gemini_api_key must be at least 8 characters",
+                    )
+                else:
+                    patch["gemini_api_key"] = value
+        if "export_root" in body:
+            raw = body["export_root"]
+            if raw is None:
+                patch["export_root"] = None
+            elif not isinstance(raw, str):
+                raise HTTPException(
+                    status_code=400, detail="export_root must be a string"
+                )
+            else:
+                value = raw.strip()
+                if not value:
+                    patch["export_root"] = None
+                else:
+                    root = Path(value).expanduser()
+                    if not root.is_absolute():
+                        raise HTTPException(
+                            status_code=400,
+                            detail="output folder must be an absolute path",
+                        )
+                    try:
+                        root.mkdir(parents=True, exist_ok=True)
+                    except OSError as exc:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"cannot use output folder {root}: "
+                                f"{exc.strerror or exc}"
+                            ),
+                        ) from exc
+                    patch["export_root"] = str(root)
+        old_key = settings_store.load().get("gemini_api_key")
+        if "gemini_api_key" in patch and patch["gemini_api_key"] is None:
+            config.restore_env_key(old_key)
+        try:
+            settings_store.save(patch)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500, detail=f"could not save settings: {exc}"
+            ) from exc
+        if "gemini_api_key" in patch:
+            try:
+                config.apply_api_key_to_env()
+            except RuntimeError:
+                pass  # no key from any source; GET reports has_key=false
+        return _settings_payload()
+
+    @app.get("/api/costs")
+    def api_costs() -> dict[str, Any]:
+        """Local cost-estimate ledger summary (spec F12) — no keys, ever.
+
+        Payload is :func:`app.cost_ledger.summary` served as-is:
+        ``{current_month, current:{translate_usd, tts_usd, total_usd,
+        calls}, history:[...], pricing_version, note}``.
+        """
+        return cost_ledger.summary()
+
+    @app.post("/api/system/reveal")
+    async def api_system_reveal(request: Request) -> dict[str, Any]:
+        proj = _require_project()
+        body = await _body(request)
+        target = body.get("target")
+        root = config.export_dir(proj.folder.name).resolve()
+        if target == "folder":
+            path = root
+        elif target in ("mp3", "wav"):
+            path = root / f"final.{target}"
+        elif isinstance(target, str) and target:
+            # Unknown target: only ever accepted inside the export dir
+            # (traversal such as "../../etc/passwd" must 404).
+            path = (root / target).resolve()
+        else:
+            raise HTTPException(status_code=404, detail="not found")
+        if not path.resolve().is_relative_to(root) or not path.exists():
+            raise HTTPException(status_code=404, detail="not found")
+        opened, selected = _launch_reveal(path)
+        if not opened:
+            raise HTTPException(
+                status_code=501,
+                detail="no file manager available (tried nautilus, nemo, xdg-open)",
+            )
+        return {"opened": opened, "selected": selected}
 
     @app.get("/api/track")
     def api_track() -> dict[str, Any]:

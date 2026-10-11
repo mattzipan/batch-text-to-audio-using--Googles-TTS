@@ -71,3 +71,24 @@ fallback `output/` next to the exe), PyInstaller onefile
 
 - Plans and specs live in `TODO.md` under `## Spec: <feature>` headings. Never overwrite or renumber existing items.
 - When a task is finished and verified, move it to `TODO-DONE.md` (keep its original wording, add the date).
+
+## WordTape frontend spacing rules (minimal)
+
+Layout tokens (unchanged): card padding `24px`; `.content` padding `32px 24px 96px`;
+content max-width `1080px`. Spacing reuses only the `6px / 12px / 14px` scale — five rules,
+enforced in `app/frontend/styles.css`:
+
+1. `.card > .section-title:first-child { margin-top: 0; margin-bottom: 14px }` — no stacked
+   28+24px heading gap; section titles outside cards keep the `28px` top margin.
+2. `.card > .btn, .card > .progress, .card > p { margin-top: 12px }` with `:first-child`
+   excluded — CTA → progress → feedback stacks never touch.
+3. `p#estimate, p[id$="ProgressText"] { font-size: 13px; color: var(--ink-60); margin-top: 12px }`
+   — bottom hints share the `.hint` type style.
+4. `.chip { margin-right: 6px } .chip:last-child { margin-right: 0 }` — pills space
+   themselves; never a literal `" "` in JS (chips after text also get `margin-left: 6px`).
+5. `.btn-row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px }` — grouped CTAs;
+   `.row-actions` keeps its dense `6px` gap as the table exception.
+
+Headless cards (Voice model, Bake build) have no heading — their first child sits flush at
+the card's `24px` padding (`.card > :first-child { margin-top: 0 }`); do not mix that pattern
+with headed cards inside the same view.

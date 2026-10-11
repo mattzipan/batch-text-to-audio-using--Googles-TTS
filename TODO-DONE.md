@@ -288,3 +288,499 @@ distinct audio; `--list-voices --language id-ID` lists the voice library.
 - [x] README/requirements/AGENTS.md in sync (repo convention); one clean commit on
   `executable-ui`; no secrets in `git show`.
 - [x] Finished items moved to `TODO-DONE.md`.
+
+---
+
+## Spec: WordTape fixes batch 2 — UX polish, settings, layout (done 2026-10-11)
+
+Status: **complete (2026-10-11)**. All 10 sub-specs implemented and verified
+(183 mocked tests green; browser click-through: choice cards, toasts, clickable
+switches, pending/generating chips, Settings screen, tiling at 700px; PATCH/404/
+masking checks via curl). Originally: 10 sub-specs (F1–F10) covering 11 user items
+(toggles merged into one root-cause fix; API key + output folder share one
+Settings screen but are separate tasks). Each sub-spec is self-contained and
+ordered by dependency — a junior agent can execute any single one alone.
+General rules for all: frontend is plain HTML/CSS/JS, no build step; pytest
+with mocked clients; never commit `app/secrets.py`, `.env`, `dist/`, `build/`.
+
+### F1 — Success toast on new project (naming: "toast")
+
+Goal: after creating a project, show a success toast — the same component used
+for the name-validation warning.
+
+Confirmed naming for future reference: **toast**. Component = `#toasts`
+container (`app/frontend/index.html:182`) + `toast(message)` fn
+(`app/frontend/app.js:17-24`) + `.toast` class (`app/frontend/styles.css:292-306`).
+Validation warnings today are server 400/409 details surfaced via `api()`
+(`app.js:43-44`); there is no success call in `doNew()` (`app.js:691-707`).
+
+Files: `app/frontend/app.js` only (no server change).
+
+Steps:
+1. In `doNew()`, after `await refreshVoices();` (`app.js:706`), add:
+   `toast("Created project " + data.project.name + ".");`
+   Use the already-returned `data.project.name` (server `state_payload()` needs
+   no change).
+2. Do NOT add an "opened" toast in `doOpen()` (out of scope — keeps this diff
+   to one line).
+3. Keep microcopy verbatim: `Created project {name}.` (matches existing
+   `Imported {n} rows.` / `Translated {n} rows.` pattern).
+
+Verify: `./venv/bin/python3 -m app.main --server-only`, create project with a
+valid name → toast appears bottom-center, auto-hides ~3.5 s; invalid name still
+shows the server-detail toast. `pytest tests/ -q` green.
+
+Watch out: `api()` throws on error, so the toast line only runs on success —
+place it after, not before, `refresh()`.
+
+### F2 — Clickable toggle switches (all `.switch` instances)
+
+Goal: every toggle flips when clicking the pill itself, the label, or via
+keyboard (Space).
+
+Root cause (verified): `.switch .track` (`app/frontend/styles.css:218-225`) is
+a full-size later sibling over the invisible `input`, with no `pointer-events`
+handling — clicks hit the dead `span`. Affects `variantsSwitch`
+(`index.html:52`), `hasHeader` (`index.html:78`), `forceRegen`
+(`index.html:134`), and dynamic Bake inclusion toggles (`app.js:542-560`,
+which have no `<label>` at all and are fully dead).
+
+Files: `app/frontend/styles.css` (1-line fix); verify in `index.html`, `app.js`.
+
+Steps:
+1. Add to the `.switch .track` rule: `pointer-events: none;` (lets clicks fall
+   through to the full-size `opacity:0` input; label `for=` associations are
+   already correct and stay as-is).
+2. Do NOT add JS click handlers — CSS `:checked + .track` needs none; values
+   are polled on submit (`doNew()` reads `variantsSwitch.checked`, `doImport()`
+   reads `hasHeader.checked`).
+3. Keyboard check: Tab-focus each switch → Space flips → visual pill slides
+   (`translateX(20px)`) and `forceRegen` still triggers `renderVoice`.
+
+Verify: manual in browser/`--server-only`: click the pill, the knob, the label
+text, and Space-key for all of: variants toggle, CSV-header toggle, force
+toggle, one Bake inclusion toggle. `pytest tests/ -q` green (no backend change).
+
+Watch out: do not use `display:none` on the input (kills keyboard access); do
+not add `z-index` hacks — `pointer-events:none` is the whole fix.
+
+### F3 — Rows table: keep both status pills, fix the styling (verdict on "obsolete")
+
+Verdict: **you are wrong for multi-variant rows, right about the single-variant
+look.** The two columns are different granularities sharing `statusChip()`:
+Translations = N pills, one per variant (`app.js:242-250`); Status = 1 rollup
+pill via `rowRollup()` (`app.js:254-256`, worst-case `error > stale >
+generating > pending > ok`). With formal+informal ON they can diverge
+(`ok + pending` vs rollup `pending`) — removing the per-variant pill loses
+which variant needs work. With one variant they read duplicated.
+Fix = keep both, remove the confusion: style the missing states and space the
+pills.
+
+Files: `app/frontend/styles.css`, `app/frontend/app.js` (spacing only).
+
+Steps:
+1. CSS: add `.chip-pending` (dashed paper, like `.chip-informal`) and
+   `.chip-generating` (solid `var(--sun)` + existing `.pulse` dot or stripe;
+   keep to one new animation-free style to stay minimal).
+2. JS `statusChip()` (`app.js:156-164`): map `pending → chip-pending`,
+   `generating → chip-generating` (keep `ok/stale/error` as-is).
+3. Spacing (do not keep the `" " + text` hack in `app.js:246` as the only gap):
+   give `.chip` `margin-right:6px; .chip:last-child{margin-right:0}` or a
+   wrapping flex `gap:6px` on the variant `wrap` div — pick one, apply to both
+   the Translations wraps (`app.js:243,248`) and inclusion list
+   (`app.js:562-566`).
+4. Do NOT delete either column.
+
+Verify: `--server-only` with variants ON, 2 rows (one `ok`, one mixed
+`ok+pending`): per-variant pills styled (no bare default `.chip`), rollup
+correct, pills never touch text. `pytest tests/ -q` green.
+
+### F4 — Minimal spacing style guide + apply it (status bars, CTAs, hints, pills)
+
+Verdict: **true, the inconsistency is real.** Audit (`styles.css` 394 lines):
+card padding uniformly `24px` (fine), but `.section-title{margin:28px 0 14px}`
+as first-child inside a padded card stacks to ~52px; CTA→progress→text stacks
+(`Build → .progress → p`, `Generate → table/audio`) have 0 inter-element gap
+(`.btn`/`.progress` no margin, `p{margin:0}`); hints use two type styles
+(`.hint` 13px grey vs bare `p#estimate/#voiceProgressText/#bakeProgressText`
+16px ink, no top margin); `.chip` has no margin (gap = hardcoded `" "` in one
+branch only); button rows use two gaps (modal `12px` vs row-actions `6px`).
+
+Files: `app/frontend/styles.css`, `app/frontend/index.html`,
+`app/frontend/app.js` (chip wraps), `AGENTS.md` (new section).
+
+Steps:
+1. Add 5 rules to `styles.css` (reuse existing scale only — `6px/12px/14px`):
+   - `.card > .section-title:first-child{margin-top:0;margin-bottom:14px}` (kills
+     52px stack; section-level titles outside cards keep `28px` top).
+   - `.card > .btn,.card > .progress,.card > p{margin-top:12px}` with
+     `:first-child` excluded (fixes CTA→feedback touching).
+   - `p#estimate,p[id$="ProgressText"]{font-size:13px;color:var(--ink-60);margin-top:12px}`
+     (extends `.hint` type to the three bare `<p>`s).
+   - `.chip{margin-right:6px}.chip:last-child{margin-right:0}` (replaces `" "` hack).
+   - New `.btn-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:14px}` token;
+     apply to download `<p>` (`index.html:176`), cancel buttons, future CTA
+     groups. Keep `.row-actions:6px` as the dense-table exception.
+2. Unify headless cards: Voice model card (`index.html:109-128`) and Bake build
+   card (`167-172`) get either a heading or the same top rhythm — do not leave
+   both patterns.
+3. Append to `AGENTS.md` a `## WordTape frontend spacing rules (minimal)` section
+   with exactly these 5 rules + the two tokens (card `24px`, content
+   `32px 24px 96px`, max-width `1080px`). Keep under 30 lines — minimal-viable,
+   not a design system.
+
+Verify: open Words/Voice/Bake at 1280px, screenshot-compare: no 52px heading
+gap, no touching CTA stacks, all bottom hints 13px grey with 12px top gap,
+pills spaced without literal spaces. `pytest tests/ -q` green.
+
+### F5 — Window tiling with Super+Left/Right
+
+Root cause (verified against pywebview 6.2.1 `platforms/gtk.py`): window is
+decorated + `resizable=True` (good), but `min_size=(1024,700)`
+(`app/main.py:116` → `set_size_request(1024,700)`) exceeds a half-screen on
+1080p/HiDPI-scaled displays (e.g. 1920/2 − dock < 1024) so Mutter refuses the
+tile and it looks "not working".
+
+Files: `app/main.py`, `app/frontend/styles.css` (+ `index.html` choice-grid from
+F10 must also collapse — coordinate, don't duplicate).
+
+Steps:
+1. `app/main.py:116`: change `min_size=(1024,700)` → `min_size=(640,400)`.
+   Keep `width=1280,height=800,resizable=True`, decorated (no `frameless`),
+   no `fullscreen/maximized/on_top`.
+2. CSS: add `@media (max-width:900px)`: `.content{padding:20px 16px 64px}`,
+   `.row-table` horizontal scroll (`overflow-x:auto`, min-width preserved, do
+   NOT reflow the 5-col grid into rows), choice-grid (F10) stacks to 1 col.
+3. Do NOT set `minimum` anywhere else; do NOT force `x/y` position.
+
+Verify: on GNOME/Mutter (Mint + Zorin): launch → Super+Left tiles to left
+half, Super+Right to right half, drag-to-edge snaps, no snap-back; content
+usable at 640px (scroll, no overlap). `pytest tests/ -q` green.
+
+Watch out: lowering `min_size` without the media query leaves the rows grid
+overflowing — both parts are required.
+
+### F6 — "Your tape" CTA: open output folder + reveal file
+
+Today (`index.html:173-178`, `app.js:572-581`): success card shows playback +
+downloads + plain-text `outputPath` — no open/reveal action; no
+`xdg-open|reveal` code in `app/`; only opener-dialogs (`pick_folder/pick_file`
+in `app/main.py:61-109`, unused by frontend).
+
+Files: `app/server.py` (new route), `app/main.py` or server-side opener (pick
+one — server-side `xdg-open` works in browser-fallback too), `app/frontend/*`.
+
+Steps:
+1. Server: `POST /api/system/reveal {target: "folder"|"mp3"|"wav"}` —
+   resolve against `config.export_dir(project)` only (reuse the `/export/`
+   traversal guard pattern: `resolve()` + `is_relative_to`), then try in order:
+   `["nautilus","--select",file]` → `["nemo","--select",file]` →
+   `["xdg-open",folder]`; return `{opened:bool, selected:bool}` (selected=false
+   on the `xdg-open` fallback). `subprocess.Popen` (do NOT block the job
+   thread); on failure return 501 with detail, frontend toasts it.
+2. Frontend success card: add `.btn-row` (F4 token) with `Open output folder`
+   (primary-ghost) + `Show MP3` buttons; wire to the route; disable while no
+   `track.exists`.
+3. Microcopy: buttons exactly `Open output folder` / `Show MP3`; error toast
+   reuses `Oof — the API said no. Check the key?`-style generic path (new
+   string: `Couldn't open the folder. Path copied above.` — and select the
+   `#outputPath` text on failure so the path is still reachable).
+
+Verify: pytest new `test_server.py` cases (traversal `../../etc/passwd` → 404,
+missing track → 404, mocked `Popen` success shape); manual on Mint (Nemo) and
+Zorin (Nautilus): folder opens, MP3 pre-selected where supported.
+
+Watch out: never pass user raw paths to the shell — allowlist to export dir;
+never `check=True`/`capture_output` block the event loop (fire-and-forget
+`Popen`).
+
+### F7 — App Settings screen + Gemini API key (persisted, replaceable)
+
+Today: key = env `GEMINI_API_KEY` → else baked `app/secrets.py` (`config.py:21-41`,
+baked by `build.sh:27-35`); env overrides baked but there is NO UI
+(`index.html` has no key input). SDK also reads `GOOGLE_API_KEY` but
+`get_api_key()` ignores it — keep ignoring (document, don't expand scope).
+
+Files: `app/config.py`, `app/server.py`, `app/frontend/*`, `app/main.py`
+(boot order). New file: `app/settings_store.py`.
+
+Steps:
+1. `app/settings_store.py`: `load()/save(patch)` over
+   `~/.local/share/WordTape/settings.json` (`XDG_DATA_HOME`-aware, `0o600`
+   file perms, `mkdir -p`); schema `{gemini_api_key: str|null, export_root:
+   str|null}` (export_root owned by F8 — include the key now, wire later).
+   `clear` = set `null` (revert to env/baked). Never log the value.
+2. `config.get_api_key()`: precedence user-setting → env → baked `secrets.py`;
+   `apply_api_key_to_env()` unchanged in shape (called at boot in
+   `main.py:25-29` AND re-called after a settings save so Translate/TTS pick up
+   the new key without restart).
+3. Server: `GET /api/settings` returns `{has_key:bool, key_hint:"…last4",
+   export_root:str|null, export_default:str}` (NEVER the full key);
+   `PATCH /api/settings {gemini_api_key?: string|null}` — empty string = clear;
+   validate non-empty as plausible key (length ≥ 8, no whitespace-only);
+   on save, re-resolve + return `has_key/key_hint`.
+4. Frontend: topbar gear `⚙ Settings` button (NOT a 4th numbered stepper —
+   settings is not part of the 01→03 sequence; see F10) opening a `Settings`
+   screen/section with password input + `Save key` + `Remove key` + hint
+   `Saved on this machine only. Takes effect immediately.` Toasts: `API key
+   saved.` / `API key removed — using baked key.`
+5. Tests: `settings_store` roundtrip (tmp `XDG_DATA_HOME`), precedence
+   (setting beats env beats secrets), server masks key (no full key in any
+   response body).
+
+Verify: save key → restart app → still set (`has_key` true, hint stable);
+remove → falls back to baked/env; Translate works after save without restart.
+`pytest tests/ -q` green. Update README key section (baked → overridable).
+
+Watch out: `import app.settings_store` lazily where possible (keep the
+no-credentials-on-import rule); `settings.json` is gitignored — add it.
+
+### F8 — Settings: user-defined output folder
+
+Today: global root = `~/Music/WordTape/` else `<app>/output/`, override only
+via `WORDTAPE_EXPORT_DIR` env (`config.py:78-89`); per-project subfolder
+`<root>/<project>/` created by `assembler.build_track()` (`assembler.py:147-151`).
+Not in `project.json` (correct — it is machine-specific, like the key).
+
+Files: same Settings screen as F7 (`app/config.py`, `app/server.py`,
+`app/frontend/*`).
+
+Steps:
+1. `config.export_dir()`: precedence `settings.export_root` → env
+   `WORDTAPE_EXPORT_DIR` → Music → `<app>/output`. `export_root` = root only;
+   project subfolder appended as today (no per-project override in this batch).
+2. Server: extend `PATCH /api/settings` with `{export_root?: string|null}` —
+   validate: must be absolute, must exist or be creatable (`mkdir -p` dry check
+   at save, error toast otherwise); `null`/empty = reset to default. `GET`
+   includes `export_root` + `export_default` + current `output_dir` per project
+   (existing `_track_info` key, unchanged).
+3. Frontend Settings screen: `Output folder` text input + `Browse…` (calls
+   existing `window.pywebview.api.pick_folder()` with typed-path fallback for
+   browser mode) + `Reset to default`; hint shows resolved default path.
+   Toast: `Output folder updated.` Existing Bake `#outputPath` display + `/export/`
+   serving keep working (they read `export_dir()`, no change needed).
+4. Tests: `export_dir` precedence chain (mocked `music_dir` + tmp settings +
+   env), PATCH validation (relative path → 400, unwritable → 400, null →
+   default). Manual: set folder → Bake → MP3 lands in
+   `<new-root>/<project>/final.mp3`, old files untouched (no migration).
+
+Verify: set → rebuild → file in new root; reset → default restored; restart
+persists. `pytest tests/ -q` green.
+
+### F9 — Bake settings persistence (verify-only, no change expected)
+
+Answer: **already the case — keep as is.** Bake knobs (`repeats`,
+`repeat_gap_s`, `item_gap_s`, `voice`, `tts_model`) persist per-project in
+`project.json` (`project.py:89-93` schema, `185-195` save, `258-262` load) via
+`PATCH /api/project/settings` (`server.py:644-699`, validation `1-10`/`0-60`),
+restored in `renderBake()` (`app.js:526-536`) + `renderVoice()` (`450-457`).
+Session-only by design (NOT persisted): inclusion checkboxes (`unchecked:Set`,
+`app.js:14,551-554`) and `forceRegen` — do not persist these in this batch.
+
+Steps (verify only):
+1. Run `pytest tests/test_project.py tests/test_server.py -q` — settings
+   roundtrip green.
+2. Manual: set repeats 5→3, gaps, voice → close app → reopen project → values
+   intact; checkboxes reset (expected).
+3. If and only if step 1 fails, fix `save/load` to include the missing key —
+   do not invent a global settings file for bake (bake stays per-project; app
+   globals live in F7/F8).
+
+Verify: the two checks above pass; no code diff required. If a diff was needed,
+state which key was missing.
+
+### F10 — Project vs Open as side-by-side choice cards
+
+Agreed — **yes, change it.** They are alternative entries to the same thing
+(new vs existing), not steps 1→2, so the current vertical stack misleads the
+user into reading them as a top-to-bottom flow. Common pattern: parallel
+choice cards in one row with equal weight (design-lead: numbered `01/02/03`
+markers encode sequence and must NOT be used here; a plain `or` divider does).
+
+Files: `app/frontend/index.html`, `app/frontend/styles.css`.
+
+Steps:
+1. Wrap the two cards (`index.html:23-57` Project + `58-69` Open) in
+   `<div class="choice-grid">`; keep each card's contents, ids
+   (`newName/newSource/newTarget/swapLangs/variantsSwitch/newProjectBtn`,
+   `openPath/openBtn/recentList`), `--i` animation indices, and validation
+   untouched.
+2. CSS: `.choice-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;
+   align-items:start}` + `@media (max-width:900px){.choice-grid{grid-template-columns:1fr}}`
+   (stacks on narrow tiled windows — pairs with F5). Both cards keep `.card`
+   padding/border; headings stay `Project` / `Open project`; add a small
+   `or` divider label between them on desktop only (CSS `::after` or a
+   `.choice-or` span — pick one, keep it 12px uppercase grey, aria-hidden).
+3. Do NOT renumber the `01 Words / 02 Voice / 03 Bake` stepper; do NOT move
+   Import/Rows/Add cards.
+
+Verify: at 1280px the two cards sit equal-height side by side; at 700px tiled
+width they stack without overlap; keyboard/validation/toast behavior unchanged
+(F1 still fires). `pytest tests/ -q` green (frontend-only change).
+
+### Batch definition of done
+
+- Each F-spec above has its Verify actually run; `pytest tests/ -q` green.
+- `--server-only` click-through of Words → Voice → Bake still works; new
+  Settings screen reachable from the topbar on both webview and browser fallback.
+- README updated for Settings (key override + output folder) and tiling
+  `min_size`; AGENTS.md carries the 5-rule spacing guide (F4).
+- One commit per F-spec (or one per merged PR), no secrets in `git show`.
+
+---
+
+---
+
+## Spec: WordTape cost estimates — per-call toasts + monthly ledger (done 2026-10-11)
+
+Status: **complete (2026-10-11)**. F11 + F12 implemented and verified (est.
+suffixes only when usageMetadata reported; local ledger + Settings costs card;
+183 mocked tests green). Verdict: **literal request skipped, estimate
+variant feasible and specced below (F11–F12).**
+
+### Verdict (report-back: possible as estimates, not as billed cost)
+
+- The Gemini API (`generate_content` via `google-genai>=2.25.0`) returns **no
+  dollar cost field**. It returns `response.usage_metadata` token counts only
+  (`prompt_token_count`, `candidates_token_count`, `total_token_count`, plus
+  per-modality `prompt_tokens_details` / `candidates_tokens_details`). No code
+  in the repo reads it today (grep for `usage_metadata|cost|price` = 0 hits in
+  `*.py`; `backends/gemini.py:74-84` reads only `response.parts`; 
+  `app/translate.py:101-102` reads only `response.text`).
+- There is **no billing API readable with just `GEMINI_API_KEY`**. Cloud Billing
+  (`cloudbilling.googleapis.com`) needs GCP OAuth + IAM, not the AI Studio key.
+  Spend truth lives in AI Studio Billing / Cloud Console only.
+- Feasible path: **estimate locally** = `usage_metadata × pricing table`, show
+  `~$X est.` in toasts, accumulate into a local monthly ledger. Every cost
+  shown must be labeled `est.` — never "final"/"charged".
+- Pricing table (Standard tier, `https://ai.google.dev/gemini-api/docs/pricing`;
+  TTS GA 2026-09-22, introductory through Dec 31 2026, **doubles Jan 1 2027**):
+  - `gemini-3.8-flash-lite-tts`: text-in $0.50/1M, audio-out $6.00/1M
+    (→ $1.00 / $12.00 in 2027).
+  - `gemini-3.8-flash-tts`: text-in $0.50/1M, audio-out $9.00/1M
+    (→ $1.00 / $18.00 in 2027).
+  - `gemini-3.5-flash-lite` (translation): text-in $0.30/1M, text-out $2.50/1M,
+    cached-in $0.03/1M (ignore cached unless `cached_content_token_count` > 0).
+  - TTS audio tokens ≈ 25 tok/s; modality comes from
+    `candidates_tokens_details[{modality:AUDIO}]`. If details are absent, treat
+    all candidates tokens as AUDIO for TTS models, as TEXT for the translation
+    model. `voices.list` costs nothing — exclude it.
+- Retry/parse-retry calls each cost money — count every actual
+  `generate_content` invocation (including translation `_RETRY_SUFFIX` retries
+  and per-item 2s/4s/8s retries), not just logical batches.
+
+### F11 — Per-call estimated cost in toasts (translate, test-voice, TTS list)
+
+Goal: after each billable action the existing toast gains an estimate suffix,
+e.g. `Translated 10 rows (~$0.004 est.)`, `Baked 30 clips (~$0.021 est.)`,
+sample playback shows `Sample ready (~$0.0004 est.)`.
+
+Files: new `app/costs.py`; touch `backends/gemini.py`, `backends/base.py`,
+`app/translate.py`, `app/tts.py`, `app/server.py` (job messages), 
+`app/frontend/app.js` (toast strings only).
+
+Steps:
+1. `app/costs.py` (new, pure, no credentials): `PRICING` dict keyed by exact
+   model id with `{input_per_1m, audio_per_1m, text_out_per_1m,
+   effective_from:"2026-09-22", doubles_on:"2027-01-01"}` + `_rate_for(model,
+   date)` handling the 2027 doubling + `estimate_translate(usage)` (prompt ×
+   in + candidates × text-out + cached × cached-in) and `estimate_tts(usage,
+   model)` (prompt-TEXT × in + candidates-AUDIO × audio-out) + `fmt_est(usd)`
+   (`~$0.004`, 4 decimals under $0.01 else 2). All readers use `getattr`
+   defensively — `usage=None` → return `None` (caller omits the suffix, never
+   `$0.00`).
+2. `backends/base.py`: add optional fields to `SynthesisResult`
+   (`prompt_tokens:int|None=None, candidates_tokens:int|None=None,
+   estimated_cost_usd:float|None=None`) — keep positional order so existing
+   constructions don't break.
+3. `backends/gemini.py:_synthesize_one`: return `(wav_bytes, usage)`; on the
+   success path compute `costs.estimate_tts(getattr(response,
+   "usage_metadata", None), self.model)`; `synthesize_many` attaches per-item
+   `estimated_cost_usd` (failed items: `None`). Retries: each attempt that got
+   a response counts — simplest correct rule: cost of the successful attempt
+   only, plus a `*_all_attempts_usd` sum if trivial; document whichever is
+   chosen in the docstring.
+4. `app/translate.py:translate_rows`: add kwarg `collect_costs:list|None=None`
+   (default keeps the `dict` return shape so existing tests don't break);
+   after each `_call_with_retries` (first try AND `_RETRY_SUFFIX` retry),
+   append `estimate_translate(getattr(resp,"usage_metadata",None))` when not
+   `None`. `_call_with_retries` must return the raw response (it already does)
+   — do not change its retry/backoff behavior.
+5. `app/tts.py:generate_audio` / `test_voice`: sum per-result
+   `estimated_cost_usd` (skip `None`); return `(results, total_usd)` — or keep
+   return shape and add optional `collect_cost:dict|None` out-param if changing
+   the tuple breaks callers; pick one and update `app/server.py` call sites
+   (`server.py:201,245,562`) to include `~$X est.` in the job `message` and in
+   the JSON the frontend toasts. `test_voice` (single clip, `tts.py:98-113`)
+   returns bytes today — add cost via response header (`X-Est-Cost-USD`) or a
+   `{audio_b64, estimated_cost_usd}` envelope on a NEW route version; do NOT
+   break the existing `/api/voice/test` bytes contract without bumping the
+   frontend together.
+6. Frontend: toast strings only — append `(~$X est.)` when the server reports a
+   cost; when cost is absent (old cache, mocks, `usage=None`) keep today's
+   exact strings. Never show the word "final" or "charged".
+
+Verify: pytest with `SimpleNamespace(usage_metadata=SimpleNamespace(
+prompt_token_count=29, candidates_token_count=92, prompt_tokens_details=[...],
+candidates_tokens_details=[{modality:AUDIO...}]))` → TTS-lite ≈
+29/1M×$0.50 + 92/1M×$6.00; translate batch ≈ prompt×$0.30 + candidates×$2.50;
+`usage=None` → suffix omitted. All existing tests green (return-shape
+backward compat). Manual `--server-only`: translate 1 row + test voice show
+`est.` suffix.
+
+Watch out: never call `.text` on TTS responses or `.parts` assumptions on
+translate; never block synthesis on costing (wrap estimate in try/except →
+`None`); keep `backends/` credential-free.
+
+### F12 — Settings: current-month estimate + past-months table (local ledger)
+
+Goal: Settings screen (F7/F8) gains a `Costs (estimates)` card: current
+calendar-month total + a past-months table. No billing integration — local
+ledger only, labeled as such.
+
+Files: new `app/cost_ledger.py`; touch `app/server.py` (record + `GET
+/api/costs`), Settings frontend, `.gitignore`.
+
+Steps:
+1. `app/cost_ledger.py`: JSON file `~/.local/share/WordTape/costs.json`
+   (`XDG_DATA_HOME`-aware, same dir family as F7 `settings.json`; gitignored).
+   Schema `{"months": {"2026-10": {"translate_usd":…, "tts_usd":…,
+   "calls":…, "updated_at":…}}, "pricing_version":"2026-09-22+intro"}`.
+   `record(kind:"translate"|"tts", usd:float)` rounds to 6 decimals, creates
+   the current `%Y-%m` bucket, writes atomically (`tmp` + `os.replace`),
+   never raises into the synthesis path (caller wraps in try/except).
+2. Server: call `record()` on every successful billable completion (translate
+   job, `generate_audio` job, `test_voice` single — including $0-est skips as
+   calls with 0); `GET /api/costs` → `{current_month:"2026-10",
+   current:{translate_usd,tts_usd,total_usd,calls}, history:[{month,
+   translate_usd,tts_usd,total_usd,calls}…] desc, pricing_version,
+   note:"Estimates from usageMetadata × Standard-tier table. Authoritative
+   spend: AI Studio Billing."}`. Month key = server local `%Y-%m`; no
+   month-end charge logic (the API is pay-as-you-go/prepay — the table is a
+   calendar-month accumulator, not an invoice).
+3. Frontend Settings card: `Costs (estimates)` — current month line
+   (`October 2026: ~$0.42 est. (translate ~$0.05 + voice ~$0.37, N calls)`),
+   table `Month | Translate | Voice | Total | Calls` (past months desc, current
+   month first row highlighted), footnote `Estimates only — check AI Studio
+   Billing for actual charges. Introductory TTS pricing ends Dec 31, 2026;
+   rates double Jan 1, 2027.` Empty state: `No API calls recorded yet.`
+4. Tests: ledger roundtrip (tmp `XDG_DATA_HOME`), month-bucket rollover (fake
+   `%Y-%m`), rounding, atomic write; server test that a mocked translate+tts
+   run increments `GET /api/costs`; frontend manual: costs survive restart,
+   table grows across fake months.
+
+Verify: `pytest tests/ -q` green incl. new `test_costs.py` + `test_cost_ledger.py`;
+manual: real translate+generate → Settings total increases by ≈ toast sums;
+restart persists; empty ledger shows empty state.
+
+Watch out: one ledger write per logical job completion (not per poll); concurrent
+jobs reuse the F-batch single-job guard — still lock the JSON write; never store
+the API key in `costs.json`.
+
+### Batch definition of done
+
+- Toasts show `(~$X est.)` only when usage was reported; otherwise today's
+  strings byte-identical. No UI ever says "final cost" or "charged".
+- Settings costs card + history table read from local ledger; empty state works.
+- `pytest tests/ -q` green; README gains a `Costs (estimates)` paragraph
+  (usageMetadata × table, intro-pricing expiry, AI Studio Billing as truth).

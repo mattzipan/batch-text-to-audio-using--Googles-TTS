@@ -23,6 +23,10 @@ class SynthesisResult:
     ok: bool
     audio: bytes | None = None    # complete WAV bytes when ok
     error: str | None = None
+    # Cost-estimate extras (appended last so positional construction holds):
+    prompt_tokens: int | None = None
+    candidates_tokens: int | None = None
+    estimated_cost_usd: float | None = None  # local estimate, never billed cost
 
 
 @dataclass
