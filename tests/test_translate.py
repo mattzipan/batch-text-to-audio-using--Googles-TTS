@@ -31,8 +31,8 @@ def make_entries(n: int, offset: int = 0) -> list[dict]:
         {
             "source": f"word{offset + i}",
             "translation": f"trans{offset + i}",
-            "formal": None,
-            "informal": None,
+            "translation_formal": None,
+            "translation_informal": None,
         }
         for i in range(n)
     ]
@@ -68,8 +68,18 @@ def test_json_parse_including_fenced_json() -> None:
         "```json\n"
         + json.dumps(
             [
-                {"source": "word0", "translation": "alpha", "formal": "A", "informal": "a"},
-                {"source": "word1", "translation": "beta", "formal": None, "informal": None},
+                {
+                    "source": "word0",
+                    "translation": "alpha",
+                    "translation_formal": "A",
+                    "translation_informal": "a",
+                },
+                {
+                    "source": "word1",
+                    "translation": "beta",
+                    "translation_formal": None,
+                    "translation_informal": None,
+                },
             ]
         )
         + "\n```"
@@ -89,21 +99,31 @@ def test_variants_off_prompt_omits_formal_informal() -> None:
     )
     result = translate_rows(rows, "de", "id", False, client=mock_client)
     contents = get_contents(mock_client).lower()
-    assert "formal" not in contents
-    assert "informal" not in contents
+    assert "translation_formal" not in contents
+    assert "translation_informal" not in contents
     assert result["r00"] == {"translation": "x", "formal": None, "informal": None}
 
-    # Variants-on prompt must mention both registers.
+    # Variants-on prompt must request both registers, pin them to the target
+    # language, and never ask for a "source" echo (batch-3 synonym fix).
     mock_client2 = MagicMock()
     mock_client2.models.generate_content.return_value = make_response(
         json.dumps(
-            [{"source": "word0", "translation": "x", "formal": "F", "informal": "I"}]
+            [
+                {
+                    "source": "word0",
+                    "translation": "x",
+                    "translation_formal": "F",
+                    "translation_informal": "I",
+                }
+            ]
         )
     )
     result2 = translate_rows(rows, "de", "id", True, client=mock_client2)
     contents_on = get_contents(mock_client2).lower()
-    assert "formal" in contents_on
-    assert "informal" in contents_on
+    assert "translation_formal" in contents_on
+    assert "translation_informal" in contents_on
+    assert "never in de" in contents_on
+    assert '"source"' not in contents_on
     assert result2["r00"] == {"translation": "x", "formal": "F", "informal": "I"}
 
 
@@ -172,8 +192,18 @@ def test_row_id_mapping_by_position() -> None:
     # Deliberately wrong/mismatched source echoes: mapping must be positional.
     payload = json.dumps(
         [
-            {"source": "WRONG-0", "translation": "T1", "formal": None, "informal": None},
-            {"source": "WRONG-1", "translation": None, "formal": "F2", "informal": None},
+            {
+                "source": "WRONG-0",
+                "translation": "T1",
+                "translation_formal": None,
+                "translation_informal": None,
+            },
+            {
+                "source": "WRONG-1",
+                "translation": None,
+                "translation_formal": "F2",
+                "translation_informal": None,
+            },
             {"source": "WRONG-2", "translation": "T3"},
         ]
     )
@@ -183,8 +213,43 @@ def test_row_id_mapping_by_position() -> None:
     assert result["id-c"] == {"translation": "T1", "formal": None, "informal": None}
     # Null translation coerces to "".
     assert result["id-a"] == {"translation": "", "formal": "F2", "informal": None}
-    # Missing formal/informal keys become None.
+    # Missing register keys become None.
     assert result["id-b"] == {"translation": "T3", "formal": None, "informal": None}
+
+
+def test_source_echo_registers_discarded() -> None:
+    """Register values that merely echo the source term are dropped.
+
+    Batch-3 fix: the model sometimes returns formal/informal variants of the
+    *source* term (wrong language); those must never be stored.
+    """
+    rows = [
+        Row(id="r1", position=1, source="Haus", variants=[]),
+        Row(id="r2", position=2, source="  Brot ", variants=[]),
+    ]
+    payload = json.dumps(
+        [
+            {
+                "translation": "rumah",
+                "translation_formal": "Haus",  # exact source echo
+                "translation_informal": "  HAUS ",  # case/space echo
+            },
+            {
+                "translation": "roti",
+                "translation_formal": "BROT",  # casefolded source echo
+                "translation_informal": "makanan",  # genuine — kept
+            },
+        ]
+    )
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = make_response(payload)
+    result = translate_rows(rows, "de", "id", True, client=mock_client)
+    assert result["r1"] == {"translation": "rumah", "formal": None, "informal": None}
+    assert result["r2"] == {
+        "translation": "roti",
+        "formal": None,
+        "informal": "makanan",
+    }
 
 
 def test_uses_configured_model_and_json_mime() -> None:

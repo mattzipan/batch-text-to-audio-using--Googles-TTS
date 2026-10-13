@@ -6,10 +6,64 @@ unavailable). Importing this module has no side effects.
 """
 
 import argparse
+import json
 import sys
 import webbrowser
 
 from app import boot, config, server
+
+
+def _setup_native_drop(window) -> None:
+    """Bridge native file drops to the loaded page (packaged-app fix).
+
+    WebKitGTK (the packaged Linux backend) does not populate
+    ``dataTransfer.files`` for plain JS listeners, and pywebview only collects
+    the dropped filesystem paths when a DOM ``drop`` handler is registered
+    from Python — that registration arms pywebview's GTK drag-data hook, which
+    injects ``pywebviewFullPath`` into each file of the event. We forward the
+    first path to the page (``window.__wordtapeNativeDrop``), which imports it
+    via the local server's ``/api/project/import`` path mode. Registered on
+    the document so drops anywhere in the window work; ``dragover`` is
+    prevent-defaulted so WebKitGTK allows the drop at all. Browser fallback
+    mode keeps the plain HTML5 handlers in ``app.js`` and never calls this.
+    """
+    from webview.dom import DOMEventHandler
+
+    def forward_drop(event: dict) -> None:
+        try:
+            files = (event.get("dataTransfer") or {}).get("files") or []
+        except AttributeError:
+            return
+        path = None
+        for file in files:
+            if not isinstance(file, dict):
+                continue
+            if file.get("pywebviewFullPath"):
+                path = str(file["pywebviewFullPath"])
+                break
+            name = str(file.get("name") or "")
+            if path is None and name.startswith("file://"):
+                path = name[len("file://") :]
+        if not path:
+            return
+        try:
+            window.evaluate_js(
+                "window.__wordtapeNativeDrop && window.__wordtapeNativeDrop("
+                + json.dumps(path)
+                + ")"
+            )
+        except Exception:  # noqa: BLE001 - drop bridge must never crash the app
+            pass
+
+    def register() -> None:
+        document = window.dom.document
+        document.on(
+            "dragover",
+            DOMEventHandler(lambda event: None, prevent_default=True),
+        )
+        document.on("drop", DOMEventHandler(forward_drop, prevent_default=True))
+
+    window.events.loaded += register
 
 
 def main(argv=None) -> None:
@@ -108,7 +162,7 @@ def main(argv=None) -> None:
                     return [str(item) for item in items]
                 return str(result)
 
-        webview.create_window(
+        window = webview.create_window(
             config.APP_NAME,
             url,
             width=1280,
@@ -117,6 +171,7 @@ def main(argv=None) -> None:
             resizable=True,
             js_api=Api(),
         )
+        _setup_native_drop(window)
         webview.start(
             private_mode=False,
             storage_path=str(config.app_root() / ".webview"),

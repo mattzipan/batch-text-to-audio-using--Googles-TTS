@@ -784,3 +784,120 @@ the API key in `costs.json`.
 - Settings costs card + history table read from local ledger; empty state works.
 - `pytest tests/ -q` green; README gains a `Costs (estimates)` paragraph
   (usageMetadata × table, intro-pricing expiry, AI Studio Billing as truth).
+
+## Spec: WordTape fixes batch 3 — drag-n-drop import, target-language synonyms (done 2026-10-13)
+
+Status: **complete (2026-10-13)**. Both bugs fixed and verified: 188 mocked tests green (+5 new: path-import txt/csv/errors, source-echo discard, stale-register removal); browser click-through (project create, file drop → "Imported 3 rows.", text/uri-list fallback via path import, no-project microcopy, per-row ⇄ action); path-mode import exercised live via curl. The packaged-app native drop (pywebview DOM drop handler in `app/main.py`) needs one manual check on the Zorin machine — the GTK bridge cannot be driven from here.
+
+### B1 — Drag-n-drop import does nothing (webview)
+
+Goal: dropping a `.txt`/`.csv` file on the app imports it, in the packaged
+(GTK/WebKitGTK) app **and** in browser fallback.
+
+Root cause (verified in pywebview 6.2.1 sources): the packaged app runs the
+GTK backend. pywebview only exposes dropped-file paths when the drop is
+observed through its DOM API — `element.on('drop', …)` bumps
+`_dnd_state['num_listeners']`, which arms the GTK `drag-data-received` hook
+that collects the `file://` URIs and injects `pywebviewFullPath` into each
+file of the DOM event. Our plain JS `addEventListener` on `#dropzone` never
+gets a path, and WebKitGTK's `dataTransfer.files` is empty there, so
+`files.length > 0` is false and the handler silently returns. Secondary:
+`FileReader`/handler errors are unhandled promise rejections (no toast);
+drops only register over the small dropzone; click-to-pick ignores the
+already-implemented `Api.pick_file` bridge.
+
+Files: `app/server.py`, `app/main.py`, `app/frontend/app.js`,
+`app/frontend/index.html`; tests in `tests/test_server.py`.
+
+Steps:
+1. Server: extend `POST /api/project/import` to accept `path` (absolute
+   filesystem path) as an alternative to `content` — mutually exclusive
+   (`400` when both or neither given). Path mode: reject non-str, non-`.txt`/
+   `.csv` extensions (400 with detail), missing/non-file (404), > 5 MiB (400);
+   read bytes, decode `utf-8-sig` (same as browser uploads); then reuse the
+   existing parse → `proj.rows.clear()` + `insert_row` → `save_project`
+   replace semantics. Response shape unchanged (`{"imported": N}`).
+2. `app/main.py`: after the window is shown, register pywebview DOM handlers —
+   `drop` on `#dropzone` **and** on the document (whole-window drops), plus
+   `dragover` with `prevent_default=True` on the same elements so WebKitGTK
+   allows the drop. The drop callback reads
+   `event['dataTransfer']['files'][*]['pywebviewFullPath']` (fallback: the
+   `name`/`file://` URI from `text/plain` payload) and forwards the first path
+   to the page: `window.evaluate_js('window.__wordtapeNativeDrop(<json>)')`.
+3. `app/frontend/app.js`:
+   - `window.__wordtapeNativeDrop(path)` → `needProject()` gate, then POST
+     `/api/project/import` `{path, has_header}` → `refresh()` → existing
+     `Imported N rows.` toast.
+   - Keep the HTML5 handlers for browser mode; add a `text/uri-list` (then
+     `text/plain`) fallback that extracts a `file://` path and calls the same
+     import-by-path flow; dedupe so a drop handled natively within ~1 s is
+     not double-imported by the JS handler.
+   - Wrap the whole drop/import flow in try/catch with a toast on failure (no
+     more silent rejections).
+   - Click-to-pick: prefer `window.pywebview.api.pick_file(['txt','csv'])`
+     (returns a path → import-by-path); fall back to `<input type=file>`.
+4. `app/frontend/index.html` / microcopy: `#dropText` when no project is open
+   reads `Create or open a project first — then drop a .txt or .csv here.`
+   (set from `refresh()`/`renderRows()`); keep the "project required" toast.
+
+Verify: `pytest tests/ -q` green incl. new path-import tests; manual: in
+`--server-only` browser mode, drop a .txt → rows appear, bad path → toast;
+in the packaged app, drop a .txt anywhere on the window → rows appear;
+click the dropzone in the packaged app → native picker opens.
+
+Watch out: import still requires an open project (by design); path imports
+bypass the browser sandbox, so the extension/size/exists checks are the
+security boundary — the server is localhost-only, never expose it.
+
+### B2 — Formal/informal synonyms come back in the source language
+
+Goal: with `variants_enabled`, `formal`/`informal` variants are alternative
+renderings of the **translation, in the target language** — never register
+variants of the source term.
+
+Root cause: `_build_prompt` says `formal/informal = alternatives with exactly
+the same meaning` without naming the term or the language, and asks for an
+unused `"source"` echo — the model reasonably returns source-language
+variants. Nothing rejects them downstream.
+
+Files: `app/translate.py`, `app/server.py`; tests in `tests/test_translate.py`,
+`tests/test_server.py`.
+
+Steps:
+1. `_build_prompt` (variants branch): response keys become `"translation"`,
+   `"translation_formal"`, `"translation_informal"`; drop `"source"` from the
+   schema (positional mapping stands — documented decision). Wording states
+   all three fields are translations **in `{target_lang}`**, never in
+   `{source_lang}`, that formal/informal are alternative renderings of the
+   translation (same meaning, different register), `null` when the language
+   makes no such distinction, and `Never translate names.` stays.
+2. `translate_rows`: read the new keys (`entry.get("translation_formal")` /
+   `("translation_informal")`); still tolerates extra keys. New guard: a
+   register value equal to `row.source` after strip+casefold is discarded
+   (→ `None`) — a source-language echo is never stored. Return shape stays
+   `{"translation", "formal", "informal"}`.
+3. `_translate_run` apply semantics: when `variants_enabled` and a register
+   comes back null/empty, **remove** any existing formal/informal variant of
+   that row (plus its cached wav via `audio_path`) instead of keeping stale
+   text — a re-run therefore repairs rows. Upsert-and-overwrite for non-empty
+   values stays as today.
+4. Frontend: per-row "⇄" ghost action ("Re-translate this row") →
+   `POST /api/translate {row_ids:[row.id]}` (endpoint already supports it) →
+   existing `startPoll(…, "voice", …)` + `Translated N rows.` toast.
+
+Verify: `pytest tests/ -q` green (prompt assertions updated to the new keys;
+new tests: source-echo discarded, null register removes stale variant);
+manual: toggle on, translate → formal/informal chips show target-language
+text; a row with old source-language synonyms re-translated → replaced.
+
+Watch out: keys `formal`/`informal` are internal from here on (project.json,
+API payloads, UI chips keep style names `main`/`formal`/`informal`) — only the
+Gemini response schema changes.
+
+### Batch definition of done
+
+- Dropping a .txt works in both the packaged app and browser mode; failures
+  toast instead of vanishing.
+- Synonyms are target-language; source-language echoes are impossible to
+  store; re-run clears/fixes previously wrong rows (per-row action).
+- `pytest tests/ -q` green; README import/translation notes updated if needed.

@@ -63,19 +63,22 @@ def _build_prompt(
     if with_variants:
         instruction = (
             f"Translate each source term from {source_lang} into {target_lang}. "
-            'Return a JSON array of objects with keys "source", "translation", '
-            '"formal", "informal". '
-            "translation = the most common everyday translation. "
-            "formal/informal = alternatives with exactly the same meaning but "
-            "more formal/informal register, or null if the language makes no "
-            "such distinction. "
+            'Return a JSON array of objects with keys "translation", '
+            '"translation_formal", "translation_informal". '
+            "All three values are the meaning of the source term rendered "
+            f"in {target_lang}, never in {source_lang}. "
+            '"translation" = the most common everyday rendering. '
+            '"translation_formal" / "translation_informal" = alternative '
+            "renderings of that same translation with a more formal / "
+            "informal register, or null when the language makes no such "
+            "distinction. "
             "Never translate names."
         )
     else:
         instruction = (
             f"Translate each source term from {source_lang} into {target_lang}. "
-            'Return a JSON array of objects with keys "source" and "translation". '
-            "translation = the most common everyday translation. "
+            'Return a JSON array of objects with keys "translation". '
+            f"translation = the most common everyday rendering in {target_lang}. "
             "Never translate names."
         )
     lines = [instruction, "Terms (return one object per term, in the same order):"]
@@ -147,6 +150,17 @@ def _coerce_str_or_none(value: Any) -> str | None:
     return str(value)
 
 
+def _is_source_echo(value: str | None, source: str) -> bool:
+    """True when a register value merely echoes the source term.
+
+    The model occasionally returns formal/informal variants *of the source
+    term* (the wrong language); those are discarded rather than stored.
+    """
+    if not value:
+        return False
+    return value.strip().casefold() == source.strip().casefold()
+
+
 def _estimate_response_cost(response: Any) -> float | None:
     """Local cost estimate for one generate_content response; never raises."""
     try:
@@ -170,7 +184,8 @@ def translate_rows(
     Returns a mapping of ``row.id`` to ``{"translation", "formal", "informal"}``.
     ``translation`` coerces missing/null to ``""``; ``formal``/``informal`` stay
     ``None`` when absent (and are always ``None`` when ``with_variants`` is
-    False).
+    False). Register values that merely echo the row's source term (the model
+    answering in the source language) are discarded to ``None``.
 
     When ``collect_costs`` is given, it receives one local cost estimate
     (USD, from usage_metadata × the pricing table) after each actual
@@ -241,8 +256,12 @@ def translate_rows(
             else:
                 translation = str(raw_translation)
             if with_variants:
-                formal = _coerce_str_or_none(entry.get("formal"))
-                informal = _coerce_str_or_none(entry.get("informal"))
+                formal = _coerce_str_or_none(entry.get("translation_formal"))
+                informal = _coerce_str_or_none(entry.get("translation_informal"))
+                if _is_source_echo(formal, row.source):
+                    formal = None
+                if _is_source_echo(informal, row.source):
+                    informal = None
             else:
                 formal = None
                 informal = None

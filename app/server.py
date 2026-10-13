@@ -46,6 +46,45 @@ _NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 _DEFAULT_TTS_MODEL = "gemini-3.8-flash-lite-tts"
 
+#: Size cap for path-based imports (the local-server analogue of a sane
+#: upload limit; word lists are tiny).
+_IMPORT_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _read_import_path(path: Any) -> tuple[str, str]:
+    """Resolve a server-side import file path to ``(kind, content)``.
+
+    Used by the webview drop/pick flow, where the browser sandbox cannot read
+    the file so the localhost server reads it from disk instead. Validates
+    extension (``.txt``/``.csv``), existence, and size before decoding as
+    ``utf-8-sig`` (the same decode the browser-upload path uses).
+    """
+    if not isinstance(path, str) or not path.strip():
+        raise HTTPException(
+            status_code=400, detail="path must be a non-empty string"
+        )
+    file = Path(path)
+    suffix = file.suffix.lower()
+    if suffix == ".txt":
+        kind = "txt"
+    elif suffix == ".csv":
+        kind = "csv"
+    else:
+        raise HTTPException(
+            status_code=400, detail="unsupported file type; use a .txt or .csv file"
+        )
+    if not file.exists() or not file.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {path}")
+    if file.stat().st_size > _IMPORT_MAX_BYTES:
+        raise HTTPException(status_code=400, detail="file is too large (max 5 MB)")
+    try:
+        data = file.read_bytes()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"could not read file: {exc}"
+        ) from exc
+    return kind, data.decode("utf-8-sig", errors="replace")
+
 
 def projects_root() -> Path:
     """Return the projects directory (inside the app folder; created on demand)."""
@@ -228,6 +267,15 @@ def _ensure_variant(proj: Project, row: Row, style: str, taken: set[str]) -> Var
     return variant
 
 
+def _remove_variant(proj: Project, row: Row, style: str) -> None:
+    """Drop the row's variant of ``style`` (if any) and its cached audio."""
+    for index, variant in enumerate(row.variants):
+        if variant.style == style:
+            projects.audio_path(proj, row.id, variant.id).unlink(missing_ok=True)
+            del row.variants[index]
+            return
+
+
 def _translate_run(wanted: list[str] | None, job: jobs.Job) -> None:
     proj = current
     if proj is None:
@@ -283,6 +331,11 @@ def _translate_run(wanted: list[str] | None, job: jobs.Job) -> None:
                         variant = _ensure_variant(proj, row, style, taken)
                         variant.text = str(value)
                         variant.status = "pending"
+                    else:
+                        # Model returned no register variant: drop any stale
+                        # one (e.g. previously stored in the wrong language)
+                        # so a re-run repairs the row.
+                        _remove_variant(proj, row, style)
         projects.save_project(proj)
     job.done = len(targets)
     job.message = f"translated {len(targets)} rows"
@@ -457,15 +510,26 @@ def create_app() -> FastAPI:
     async def api_project_import(request: Request) -> dict[str, Any]:
         proj = _require_project()
         body = await _body(request)
-        kind = body.get("kind", "")
-        content = body.get("content", "")
+        path = body.get("path")
+        content = body.get("content")
         has_header = bool(body.get("has_header", False))
-        if kind not in ("txt", "csv"):
+        if (path is None) == (content is None):
             raise HTTPException(
-                status_code=400, detail='kind must be "txt" or "csv"'
+                status_code=400,
+                detail='provide exactly one of "content" or "path"',
             )
-        if not isinstance(content, str):
-            raise HTTPException(status_code=400, detail="content must be a string")
+        if path is not None:
+            kind, content = _read_import_path(path)
+        else:
+            kind = body.get("kind", "")
+            if kind not in ("txt", "csv"):
+                raise HTTPException(
+                    status_code=400, detail='kind must be "txt" or "csv"'
+                )
+            if not isinstance(content, str):
+                raise HTTPException(
+                    status_code=400, detail="content must be a string"
+                )
         try:
             if kind == "txt":
                 pairs: list[tuple[str, str | None]] = [

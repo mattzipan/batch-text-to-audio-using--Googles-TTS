@@ -236,6 +236,64 @@ def test_import_errors(client):
     assert bad_csv.status_code == 400
 
 
+def test_import_path_txt_replaces_rows(client, tmp_path):
+    _new_project(client)
+    _import_txt(client, "Old\n")
+    words = tmp_path / "words.txt"
+    words.write_text("Haus\n\nBrot\n", encoding="utf-8")
+    resp = client.post(
+        "/api/project/import", json={"path": str(words), "has_header": False}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"imported": 2}
+    assert [row["source"] for row in _rows(client)] == ["Haus", "Brot"]
+
+
+def test_import_path_csv_with_bom_and_header(client, tmp_path):
+    _new_project(client)
+    words = tmp_path / "words.csv"
+    words.write_text(
+        "source;translation\nHaus;Rumah\nBrot;Roti\n", encoding="utf-8-sig"
+    )
+    resp = client.post(
+        "/api/project/import", json={"path": str(words), "has_header": True}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"imported": 2}
+    rows = _rows(client)
+    assert [(row["source"], row["variants"][0]["text"]) for row in rows] == [
+        ("Haus", "Rumah"),
+        ("Brot", "Roti"),
+    ]
+
+
+def test_import_path_errors(client, tmp_path):
+    _new_project(client)
+    both = client.post(
+        "/api/project/import",
+        json={"path": "x.txt", "content": "a", "kind": "txt"},
+    )
+    assert both.status_code == 400
+    neither = client.post("/api/project/import", json={"kind": "txt"})
+    assert neither.status_code == 400
+    bad_ext = client.post(
+        "/api/project/import", json={"path": str(tmp_path / "w.xlsx")}
+    )
+    assert bad_ext.status_code == 400
+    missing = client.post(
+        "/api/project/import", json={"path": str(tmp_path / "missing.txt")}
+    )
+    assert missing.status_code == 404
+    as_dir = tmp_path / "adir.txt"
+    as_dir.mkdir()
+    dir_resp = client.post("/api/project/import", json={"path": str(as_dir)})
+    assert dir_resp.status_code == 404
+    big = tmp_path / "big.txt"
+    big.write_bytes(b"x" * (server_mod._IMPORT_MAX_BYTES + 1))
+    too_big = client.post("/api/project/import", json={"path": str(big)})
+    assert too_big.status_code == 400
+
+
 # --- jobs: translate / tts / track ----------------------------------------
 
 
@@ -279,6 +337,45 @@ def test_translate_row_ids_subset(client, monkeypatch):
 
     unknown = client.post("/api/translate", json={"row_ids": ["abcdef"]})
     assert unknown.status_code == 404
+
+
+def test_translate_job_removes_stale_register_variants(client, monkeypatch):
+    """A re-run that returns no register variant drops the stale one.
+
+    Batch-3 fix: rows previously given wrong-language synonyms are repaired
+    by re-translating — the formal/informal variants (and their cached wavs)
+    must be removed when the model no longer returns them.
+    """
+    _new_project(client)
+    _import_txt(client, "Haus\n")
+    monkeypatch.setattr(server_mod.translate, "translate_rows", _fake_translate)
+    resp = client.post("/api/translate", json={})
+    assert _wait_job(resp.json()["job_id"]).error is None
+
+    rows = _rows(client)
+    formal = next(v for v in rows[0]["variants"] if v["style"] == "formal")
+    audio_file = Path(os.environ["WORDTAPE_DATA_DIR"]) / "demo" / formal["audio"]
+    audio_file.parent.mkdir(parents=True, exist_ok=True)
+    audio_file.write_bytes(b"RIFF")
+
+    def _fake_no_register(target_rows, *args, **kwargs):
+        return {
+            row.id: {
+                "translation": f"TR2-{row.source}",
+                "formal": None,
+                "informal": None,
+            }
+            for row in target_rows
+        }
+
+    monkeypatch.setattr(server_mod.translate, "translate_rows", _fake_no_register)
+    resp = client.post("/api/translate", json={"row_ids": [rows[0]["id"]]})
+    assert _wait_job(resp.json()["job_id"]).error is None
+
+    rows = _rows(client)
+    assert [variant["style"] for variant in rows[0]["variants"]] == ["main"]
+    assert rows[0]["variants"][0]["text"] == "TR2-Haus"
+    assert not audio_file.exists()
 
 
 def test_tts_generate_job_marks_ok(client, monkeypatch):

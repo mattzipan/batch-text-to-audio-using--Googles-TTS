@@ -127,6 +127,11 @@ Working data lives in `projects/` next to the executable (or the repo root in de
 written outside the app folder. Projects persist so single
 translations can be fixed and the track rebuilt later.
 
+Import words by dropping a `.txt`/`.csv` anywhere on the app window (or click the import zone
+to pick a file). With **Also make formal + informal versions** enabled, translate also returns
+formal/informal variants — always alternative renderings **in the target language**, never in
+the source language (the ⇄ row action re-translates a row and replaces its variants).
+
 ### Settings (⚙ in the top bar)
 
 *   **Gemini API key** — replaceable per machine, no rebuild needed. Saved to

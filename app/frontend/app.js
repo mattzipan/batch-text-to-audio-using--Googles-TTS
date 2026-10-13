@@ -308,6 +308,10 @@ function renderRows() {
         editingRowId = row.id;
         renderRows();
       });
+      const retrans = ghostBtn("⇄");
+      retrans.title = "Re-translate this row";
+      retrans.setAttribute("aria-label", "Re-translate row " + row.position);
+      retrans.addEventListener("click", () => doTranslateRow(row));
       const regen = ghostBtn("↻");
       regen.title = "Regenerate audio for this row";
       regen.setAttribute("aria-label", "Regenerate audio for row " + row.position);
@@ -326,12 +330,13 @@ function renderRows() {
         pendingDeleteId = row.id;
         $("modalBackdrop").hidden = false;
       });
-      [edit, regen, up, down, below, del].forEach((b) => acts.appendChild(b));
+      [edit, retrans, regen, up, down, below, del].forEach((b) => acts.appendChild(b));
     }
     table.appendChild(acts);
   });
-  $("dropText").textContent =
-    state.rows.length === 0
+  $("dropText").textContent = !state.project
+    ? "Create or open a project first — then drop a .txt or .csv here."
+    : state.rows.length === 0
       ? "No words yet — drop a .txt or .csv here and let's cook."
       : state.rows.length + " rows loaded — drop another file to replace them.";
   $("translateBtn").disabled = jobRunning || !state.project;
@@ -401,28 +406,155 @@ async function doTranslate() {
   });
 }
 
+async function doTranslateRow(row) {
+  if (!needProject()) return;
+  const data = await api("/api/translate", {
+    method: "POST",
+    body: { row_ids: [row.id] },
+  });
+  startPoll(data.job_id, "voice", async (job) => {
+    await refresh();
+    if (!job.error && !job.cancelled) {
+      toast(
+        "Translated row " + row.position + "." +
+          (job.cost_est != null ? estSuffix(job.cost_est) : "")
+      );
+    }
+  });
+}
+
+/* ---------- import (drop / pick) ---------- */
+
+// One physical drop/pick must import exactly once: in the packaged webview
+// the same drop is seen both by these JS handlers (when they fire) and by the
+// native bridge (window.__wordtapeNativeDrop, fed by main.py's pywebview DOM
+// drop handler). A short window dedupes the overlap.
+let importHandledAt = 0;
+
+function markImportHandled() {
+  importHandledAt = Date.now();
+}
+
+function recentlyHandled() {
+  return Date.now() - importHandledAt < 1500;
+}
+
+function uriListToPath(dataTransfer) {
+  // Fallback for webviews that deliver a file:// URI instead of File objects.
+  let text = "";
+  try {
+    text = (dataTransfer && dataTransfer.getData("text/uri-list")) || "";
+  } catch (err) {
+    text = "";
+  }
+  if (!text) {
+    try {
+      text = (dataTransfer && dataTransfer.getData("text/plain")) || "";
+    } catch (err) {
+      text = "";
+    }
+  }
+  const line = String(text)
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .find((s) => s);
+  if (!line) return "";
+  if (line.startsWith("file://")) {
+    const raw = line.slice("file://".length);
+    try {
+      return decodeURIComponent(raw);
+    } catch (err) {
+      return raw;
+    }
+  }
+  return "";
+}
+
+async function importByPath(path) {
+  if (!needProject()) return;
+  try {
+    const data = await api("/api/project/import", {
+      method: "POST",
+      body: { path, has_header: $("hasHeader").checked },
+    });
+    await refresh();
+    toast("Imported " + data.imported + " rows.");
+  } catch (err) {
+    /* api() already toasted the server detail */
+  }
+}
+
 async function doImport(file) {
   if (!needProject()) return;
   const name = file.name || "words.txt";
   const lower = name.toLowerCase();
   const kind = lower.endsWith(".csv") ? "csv" : "txt";
-  const content = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsText(file);
-  });
-  const data = await api("/api/project/import", {
-    method: "POST",
-    body: {
-      filename: name,
-      content,
-      kind,
-      has_header: $("hasHeader").checked,
-    },
-  });
-  await refresh();
-  toast("Imported " + data.imported + " rows.");
+  let content;
+  try {
+    content = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  } catch (err) {
+    toast("Import failed — could not read " + name + ".");
+    return;
+  }
+  try {
+    const data = await api("/api/project/import", {
+      method: "POST",
+      body: {
+        filename: name,
+        content,
+        kind,
+        has_header: $("hasHeader").checked,
+      },
+    });
+    await refresh();
+    toast("Imported " + data.imported + " rows.");
+  } catch (err) {
+    /* api() already toasted the server detail */
+  }
+}
+
+function handleDroppedItems(dataTransfer) {
+  if (recentlyHandled()) return;
+  if (dataTransfer && dataTransfer.files && dataTransfer.files.length > 0) {
+    markImportHandled();
+    doImport(dataTransfer.files[0]);
+    return;
+  }
+  const path = uriListToPath(dataTransfer);
+  if (path) {
+    markImportHandled();
+    importByPath(path);
+  }
+}
+
+// Native bridge entry point: main.py forwards the dropped file's absolute
+// path here (WebKitGTK never exposes it to plain JS listeners).
+window.__wordtapeNativeDrop = function (path) {
+  if (!path || recentlyHandled()) return;
+  markImportHandled();
+  importByPath(path);
+};
+
+async function pickAndImport() {
+  const bridge = window.pywebview && window.pywebview.api;
+  if (bridge && typeof bridge.pick_file === "function") {
+    try {
+      const result = await bridge.pick_file(["txt", "csv"]);
+      const path = Array.isArray(result) ? result[0] : result;
+      if (path) {
+        importByPath(path);
+      }
+      return; /* picked or cancelled — never fall through to a second dialog */
+    } catch (err) {
+      /* dialog unavailable — fall through to the file input */
+    }
+  }
+  $("fileInput").click();
 }
 
 /* ---------- voice ---------- */
@@ -960,9 +1092,9 @@ function bind() {
   });
 
   const dz = $("dropzone");
-  dz.addEventListener("click", () => $("fileInput").click());
+  dz.addEventListener("click", pickAndImport);
   dz.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter" || ev.key === " ") $("fileInput").click();
+    if (ev.key === "Enter" || ev.key === " ") pickAndImport();
   });
   dz.addEventListener("dragover", (ev) => {
     ev.preventDefault();
@@ -972,9 +1104,16 @@ function bind() {
   dz.addEventListener("drop", (ev) => {
     ev.preventDefault();
     dz.classList.remove("dragging");
-    if (ev.dataTransfer && ev.dataTransfer.files.length > 0) {
-      doImport(ev.dataTransfer.files[0]);
-    }
+    handleDroppedItems(ev.dataTransfer);
+  });
+  // Whole-window drop: a file dropped anywhere in the app imports too.
+  // (In the packaged webview the native path in main.py covers this as well;
+  // these listeners power the browser fallback.)
+  window.addEventListener("dragover", (ev) => ev.preventDefault());
+  window.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    dz.classList.remove("dragging");
+    handleDroppedItems(ev.dataTransfer);
   });
   $("fileInput").addEventListener("change", () => {
     if ($("fileInput").files.length > 0) doImport($("fileInput").files[0]);

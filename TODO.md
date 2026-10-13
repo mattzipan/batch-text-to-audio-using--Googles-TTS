@@ -302,3 +302,11 @@ items moved to [TODO-DONE.md](TODO-DONE.md).
   usageMetadata × Standard-tier pricing table (`app/costs.py`, which also
   handles the TTS introductory-pricing doubling on 2027-01-01). Ledger:
   `app/cost_ledger.py` (`~/.local/share/WordTape/costs.json`).
+
+---
+
+## Spec: WordTape fixes batch 3 — drag-n-drop import, target-language synonyms
+
+Status: **complete (2026-10-13)**. B1 (drag-n-drop import) and B2 (target-language synonyms) implemented and verified (188 mocked tests green; browser click-through of drop/import, uri-list fallback, per-row ⇄ re-translate, updated microcopy). Finished items moved to [TODO-DONE.md](TODO-DONE.md).
+
+---
