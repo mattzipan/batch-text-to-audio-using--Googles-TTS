@@ -1,0 +1,22 @@
+Ideally, I would like to build an interface for below workflow. I would like it to be built in javascript (astro) which ultimately builds HTML or maybe X HTML if you think that is better? I would prefer to use a framework like Astro, so we have one build process which then generates static HTML, and I can easily put the HTML files on a server, and for anything else, they use API requests. I'm not sure if we need a SQLite database or maybe just an advanced JSON file. Theoretically, I can also give credentials to an online SQL database if we need to use one, but I'm not sure if we even need a database?
+
+
+
+## workflow
+### Step1
+
+- choose source and target language. maybe? if necessary?
+- user ads either a txt list of words/phrases of a source language OR a CSV with 2 columns (source languge first, then translation)
+- TASK: If user only uploaded a list of words, then add the translations.
+- Option to add additional translations that have exactly the same meaning, but those translations may be more formal or informal. This option should be a simple, true or false, turn on or off.
+
+### Step2
+- Use a Gemini TTS model to generate audio text to speech files for each translation.
+- The interface allows to select different voice types and test them before batch generation.
+
+### Step3
+- Concatenate all of the audio files together into one long audio file. However, each translation has to be repeated five times in a row. The source language is not needed in the final audio file. For example, the first translation of row number one has to be played five times in a row with a quick break off silence for the listener to repeat, and then afterwards we follow with the next translation. You can find the estimated break between the audio files and the Python source code for generating the final audio.
+
+
+### Post Processing:
+- Sometimes the user will want to change one single translation or maybe even add a few translations. I don't know yet how to handle that within the interface. any suggestions? It must be possible to add a certain translation and replace it with another one, or to even add a new source with translation at a certain row number, or alternatively at the end.
